@@ -10,15 +10,15 @@ than available, forcing the optimizer to work with gradient accumulation,
 parameter sharding, or other memory-efficient techniques.
 """
 
-from typing import List, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import typer
+from heavyball.utils import set_torch
 
 from lightbench.utils import trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -136,7 +136,7 @@ def memory_constrained_win_condition(loss_threshold, memory_limit_mb, efficiency
 
 @app.command()
 def main(
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float32", help="Data type to use"),
     model_size: int = 16384,
     batch_size: int = 128,
     memory_limit_mb: float = 400,
@@ -144,7 +144,7 @@ def main(
     activation_checkpointing: bool = True,
     steps: int = 500,
     weight_decay: float = 0.01,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     trials: int = 15,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
@@ -163,7 +163,7 @@ def main(
         gradient_accumulation_steps = cfg.get("gradient_accumulation_steps", gradient_accumulation_steps)
         activation_checkpointing = cfg.get("activation_checkpointing", activation_checkpointing)
 
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype)
     model = MemoryConstrainedModel(
         model_size, batch_size, memory_limit_mb, gradient_accumulation_steps, activation_checkpointing
     ).cuda()
@@ -187,10 +187,11 @@ def main(
             loss_threshold=loss_thr, memory_limit_mb=memory_limit_mb, efficiency_threshold=efficiency_thr
         ),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         trials=trials,
         failure_threshold=3,
+        dtype=dtype,
     )
 
 

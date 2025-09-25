@@ -5,17 +5,17 @@ from collections import defaultdict
 from pathlib import Path
 from typing import List
 
+import heavyball
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
+from heavyball.utils import set_torch
 from torch.utils.data import DataLoader
 
-import heavyball
 from lightbench.utils import get_optim
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -108,7 +108,7 @@ def plot_results(train_losses, test_accs, steps_to_grok=None, save_path=None):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
+    method: str = typer.Option("qr", help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     opt: List[str] = typer.Option(
         ["ForeachSOAP", "PaLMForeachSOAP", "PrecondScheduleForeachSOAP"], help="Optimizers to use"

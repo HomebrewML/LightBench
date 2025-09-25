@@ -1,21 +1,18 @@
 from pathlib import Path
-from typing import List
 
 import requests
 import torch
 import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
+from heavyball.utils import set_torch
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from lightbench.utils import evaluate_test_accuracy, loss_win_condition, trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-
-app = typer.Typer()
 
 
 class TolstoiDataset(Dataset):
@@ -132,19 +129,18 @@ def download_war_and_peace():
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float32", help="Data type to use"),
     hidden_size: int = 128,
     batch: int = 50,
     steps: int = 0,
     weight_decay: float = 0,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
     seq_length: int = 50,
-    test_loader: bool = None,
+    test_loader: bool = typer.Option(True, help="Whether to track test-set accuracy."),
 ):
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype)
 
     # Download and prepare data
     data_dir = Path(__file__).parent / "data"
@@ -168,11 +164,13 @@ def main(
     print(f"Vocabulary size: {vocab_size}")
 
     # Create model
-    model = CharRNN(vocab_size=vocab_size, hidden_size=hidden_size, num_layers=2, seq_length=seq_length).cuda()
+    model = CharRNN(vocab_size=vocab_size, hidden_size=hidden_size, num_layers=2, seq_length=seq_length).to(
+        device="cuda", dtype=dtype
+    )
     # Create data loaders
     train_loader = DataLoader(train_dataset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
 
-    test_loader = DataLoader(test_dataset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
+    test_loader_dl = DataLoader(test_dataset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
     # Create data iterator
     data_iter = iter(train_loader)
 
@@ -210,11 +208,12 @@ def main(
         loss_fn,
         loss_win_condition(win_condition_multiplier * 0.0),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         failure_threshold=10,
         trials=trials,
-        eval_callback=evaluate_test_accuracy(test_loader),
+        eval_callback=evaluate_test_accuracy(test_loader_dl) if test_loader else None,
+        dtype=dtype,
     )
 
 

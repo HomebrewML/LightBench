@@ -1,20 +1,17 @@
-from typing import List
-
 import torch
 import torch.backends.opt_einsum
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
 import typer
+from heavyball.utils import set_torch
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from lightbench.utils import evaluate_test_accuracy, loss_win_condition, trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-app = typer.Typer()
 
 
 class BasicBlock(nn.Module):
@@ -77,19 +74,18 @@ class Model(nn.Module):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float32", help="Data type to use"),
     num_classes: int = 100,
     batch: int = 128,
     steps: int = 0,
     weight_decay: float = 5e-4,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    test_loader: bool = None,
+    test_loader: bool = typer.Option(True, help="Whether to track test-set accuracy."),
 ):
-    dtype = [getattr(torch, d) for d in dtype]
-    model = Model(num_classes).cuda()
+    dtype = getattr(torch, dtype)
+    model = Model(num_classes).to(device="cuda", dtype=dtype)
 
     # CIFAR-100 data loading with image augmentation
     transform_train = transforms.Compose([
@@ -110,11 +106,9 @@ def main(
     # Load datasets
     trainset = torchvision.datasets.CIFAR100(root="./data", train=True, download=True, transform=transform_train)
     trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
-    trainloader = DataLoader(trainset, batch_size=batch, shuffle=True, num_workers=0, pin_memory=True)
 
     testset = torchvision.datasets.CIFAR100(root="./data", train=False, download=True, transform=transform_test)
-    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
-    test_loader = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
+    test_loader_dl = DataLoader(testset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True)
 
     # Create data iterator that matches the expected format
     train_iter = iter(trainloader)
@@ -134,11 +128,12 @@ def main(
         F.cross_entropy,
         loss_win_condition(win_condition_multiplier * 0.0),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         failure_threshold=10,
         trials=trials,
-        eval_callback=evaluate_test_accuracy(test_loader),
+        eval_callback=evaluate_test_accuracy(test_loader_dl) if test_loader else None,
+        dtype=dtype,
     )
 
 

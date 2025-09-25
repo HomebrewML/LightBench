@@ -2,17 +2,17 @@ import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import heavyball
 import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 import typer
+from heavyball.utils import set_torch
 from torch.utils.data import DataLoader
 
-import heavyball
 from lightbench.utils import get_optim
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()

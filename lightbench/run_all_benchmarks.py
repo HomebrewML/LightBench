@@ -399,10 +399,7 @@ def main(
         # Save final results
         if results:
             write_progress(results, opt, output)
-def main():
-    """Console entry point for the Typer application."""
-    app()
 
 
 if __name__ == "__main__":
-    main()
+    app()

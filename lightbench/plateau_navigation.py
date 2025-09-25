@@ -1,17 +1,17 @@
 import math
 import pathlib
 import random
-from typing import List, Optional
+from typing import Optional
 
 import matplotlib.colors
 import torch
 import torch.backends.opt_einsum
 import typer
+from heavyball.utils import set_torch
 from torch import nn
 from utils import Plotter
 
 from lightbench.utils import loss_win_condition, trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -45,11 +45,10 @@ class Model(nn.Module):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float64", help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
@@ -57,7 +56,7 @@ def main(
 ):
     scale = configs.get(config, {}).get("scale", 4)
 
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype)
     coords = (1.5, 1.5)  # Start outside the plateau
 
     # Clean up old plots
@@ -80,10 +79,11 @@ def main(
         None,
         loss_win_condition(win_condition_multiplier * 1e-4),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         failure_threshold=3,
         trials=trials,
+        dtype=dtype,
     )
 
 

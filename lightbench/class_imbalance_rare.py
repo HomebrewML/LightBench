@@ -11,15 +11,15 @@ imbalance ratios. Success is measured by the optimizer's ability to achieve
 good performance on the minority class despite the severe imbalance.
 """
 
-from typing import List, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import typer
+from heavyball.utils import set_torch
 
 from lightbench.utils import trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -95,7 +95,7 @@ def imbalanced_win_condition(f1_threshold, recall_threshold):
 
 @app.command()
 def main(
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float32", help="Data type to use"),
     n_samples: int = 5000,
     input_dim: int = 48,
     hidden_dim: int = 32,
@@ -103,7 +103,7 @@ def main(
     noise_level: float = 0.3,
     steps: int = 2000,
     weight_decay: float = 0.01,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     trials: int = 25,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
@@ -135,10 +135,11 @@ def main(
         None,
         imbalanced_win_condition(f1_threshold, recall_threshold),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         trials=trials,
         failure_threshold=4,
+        dtype=dtype,
     )
 
 

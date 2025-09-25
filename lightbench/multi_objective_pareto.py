@@ -14,15 +14,15 @@ Success is measured by the optimizer's ability to find solutions on or near
 the Pareto frontier, representing optimal trade-offs between these objectives.
 """
 
-from typing import List, Optional
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import typer
+from heavyball.utils import set_torch
 
 from lightbench.utils import trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -115,7 +115,7 @@ def pareto_win_condition(accuracy_threshold, efficiency_threshold, weight):
 
 @app.command()
 def main(
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float32", help="Data type to use"),
     input_dim: int = 64,
     hidden_dim: int = 32,
     output_dim: int = 8,
@@ -124,7 +124,7 @@ def main(
     target_efficiency: float = 0.2,
     steps: int = 1000,
     weight_decay: float = 0.01,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     trials: int = 20,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
@@ -144,7 +144,7 @@ def main(
         efficiency_weight = cfg.get("efficiency_weight", efficiency_weight)
         target_efficiency = cfg.get("target_efficiency", target_efficiency)
 
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype)
     model = MultiObjectiveModel(input_dim, hidden_dim, output_dim, n_samples).cuda()
 
     def loss_fn(outputs, target):
@@ -169,10 +169,11 @@ def main(
             weight=efficiency_weight,
         ),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         trials=trials,
         failure_threshold=3,
+        dtype=dtype,
     )
 
 

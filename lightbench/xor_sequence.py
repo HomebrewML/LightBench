@@ -1,13 +1,13 @@
-from typing import List, Optional
+from typing import Optional
 
 import torch
 import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
+from heavyball.utils import set_torch
 from torch.nn import functional as F
 
 from lightbench.utils import loss_win_condition, trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -49,22 +49,21 @@ class Model(nn.Module):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float32", help="Data type to use"),
     length: int = 14,
     size: int = 16,
     depth: int = 1,
     batch: int = 256,
     steps: int = 100,
     weight_decay: float = 0,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1,
     trials: int = 10,
     config: Optional[str] = None,
 ):
     length = configs.get(config, {}).get("length", length)
 
-    dtype = getattr(torch, dtype[0])
+    dtype = getattr(torch, dtype)
     torch.manual_seed(0x1239121)
     model = Model(size, depth).cuda()
 
@@ -81,10 +80,11 @@ def main(
         F.binary_cross_entropy_with_logits,
         loss_win_condition(win_condition_multiplier * 1e-2),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         failure_threshold=10,
         trials=trials,
+        dtype=dtype,
     )
 
 

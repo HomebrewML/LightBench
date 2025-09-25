@@ -1,13 +1,12 @@
 import copy
 import os
 
+import heavyball
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
 import tqdm
-
-import heavyball
 
 device = "cuda"
 heavyball.utils.compile_mode = None

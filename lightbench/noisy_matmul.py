@@ -1,13 +1,13 @@
-from typing import List, Optional
+from typing import Optional
 
 import torch
 import torch.backends.opt_einsum
 import typer
+from heavyball.utils import set_torch
 from torch import nn
 from torch.nn import functional as F
 
 from lightbench.utils import param_norm_win_condition, trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -39,25 +39,24 @@ class Model(nn.Module):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float32", help="Data type to use"),
     size: int = 64,
     depth: int = 4,
     batch: int = 128,
     steps: int = 10,
     weight_decay: float = 0,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
     config: Optional[str] = None,
 ):
     depth = configs.get(config, {}).get("depth", depth)
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype)
     model = Model(size).cuda()
 
     def data():
-        inp = torch.randn((batch, depth, size, size), device="cuda", dtype=dtype[0]) / size**0.5
-        return inp, torch.zeros((batch, size), device="cuda", dtype=dtype[0])
+        inp = torch.randn((batch, depth, size, size), device="cuda", dtype=dtype) / size**0.5
+        return inp, torch.zeros((batch, size), device="cuda", dtype=dtype)
 
     trial(
         model,
@@ -65,10 +64,11 @@ def main(
         F.mse_loss,
         param_norm_win_condition(1e-7 * win_condition_multiplier, model.offset),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         failure_threshold=depth * 2,
         trials=trials,
+        dtype=dtype,
     )
 
 

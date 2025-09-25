@@ -7,18 +7,17 @@ import random
 import sys
 import time
 import warnings
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
+import heavyball.utils
 import numpy as np
 import optuna
 import torch
-from torch import nn
-from torch._dynamo import config
-
-import heavyball.utils
 from heavyball import chainable as C
 from heavyball.helpers import AutoSampler
 from heavyball.utils import PrecondInitError
+from torch import nn
+from torch._dynamo import config
 
 config.cache_size_limit = 2**16
 
@@ -335,10 +334,14 @@ class Objective:
         warmup_trials,
         eval_callback,
         ema_index: int = 0,
+        device: torch.device | str = "cuda",
+        dtype: torch.dtype | None = None,
         **kwargs,
     ):
         self.failure_threshold = failure_threshold
-        self.model = model.cuda()
+        self.device = torch.device(device)
+        self.dtype = dtype
+        self.model = self._move(model)
         for mod in self.model.modules():
             if isinstance(mod, torch.nn.RNNBase):
                 mod.flatten_parameters()
@@ -380,6 +383,13 @@ class Objective:
         self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 4)) + time.time()
         self._last_loss = None
 
+    def _move(self, module):
+        if not hasattr(module, "to"):
+            return module
+        if self.dtype is not None:
+            return module.to(device=self.device, dtype=self.dtype)
+        return module.to(device=self.device)
+
     def win_condition(self, loss=None):
         if loss is not None:
             self._last_loss = loss
@@ -406,7 +416,7 @@ class Objective:
             weight_decay=self.weight_decay,
             **self.kwargs,
         )
-        torch_hist = torch.empty(self.group, dtype=torch.float64, device="cuda")
+        torch_hist = torch.empty(self.group, dtype=torch.float64, device=self.device)
         validator = self.validator.new()
 
         for i in range(self.steps // self.group):
@@ -484,8 +494,7 @@ class Objective:
 
     def _clone_model(self, model_template):
         cloned = copy.deepcopy(model_template)
-        if hasattr(cloned, "cuda"):
-            cloned = cloned.cuda()
+        cloned = self._move(cloned)
         if hasattr(cloned, "trajectory"):
             initial = getattr(cloned, "initial", None)
             param_tensor = getattr(cloned, "param", None)
@@ -633,6 +642,36 @@ def _none_data():
     return None, None
 
 
+def _resolve_dtype(value):
+    """Normalize dtype specifications to a torch.dtype or return None.
+
+    Accepts string names or torch.dtype objects. Sequences are only supported
+    when they contain a single element; providing multiple candidates is
+    considered an error to avoid silently ignoring inputs.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        value = list(value)
+        if not value:
+            return None
+        if len(value) > 1:
+            raise ValueError(f"Expected a single dtype, received {len(value)} values.")
+        value = value[0]
+
+    if isinstance(value, str):
+        try:
+            return getattr(torch, value)
+        except AttributeError as exc:  # pragma: no cover - defensive guard
+            raise ValueError(f"Unknown torch dtype '{value}'") from exc
+
+    if isinstance(value, torch.dtype):
+        return value
+
+    raise TypeError(f"Unsupported dtype specification: {type(value)!r}")
+
+
 def trial(
     model,
     data,
@@ -649,6 +688,9 @@ def trial(
     random_trials: int = 10,
     eval_callback: Optional[Callable] = None,  # evaluate_test_accuracy(dataloader)
     ema_beta: float = 0.9,
+    *,
+    device: torch.device | str = "cuda",
+    dtype: torch.dtype | str | None = None,
 ):
     if data is None:
         data = _none_data
@@ -662,11 +704,22 @@ def trial(
     if not opt_list:
         raise ValueError("At least one optimizer must be provided.")
 
+    target_device = torch.device(device)
+    target_dtype = _resolve_dtype(dtype)
+
+    def _prepare_module(module):
+        if not hasattr(module, "to"):
+            return module
+        if target_dtype is not None:
+            return module.to(device=target_device, dtype=target_dtype)
+        return module.to(device=target_device)
+
+    model = _prepare_module(model)
     plotter_template = model if isinstance(model, Plotter) else None
     if plotter_template is not None:
-        base_model_template = copy.deepcopy(plotter_template.objective)
+        base_model_template = _prepare_module(copy.deepcopy(plotter_template.objective))
     else:
-        base_model_template = copy.deepcopy(model)
+        base_model_template = _prepare_module(copy.deepcopy(model))
 
     heavyball.utils._ignore_warning("logei_candidates_func is experimental")
     heavyball.utils._ignore_warning("BoTorchSampler is experimental")
@@ -735,6 +788,8 @@ def trial(
             weight_decay,
             max(trials * warmup_trial_pct, 1 + random_trials),
             eval_callback,
+            device=target_device,
+            dtype=target_dtype,
             **kwargs,
         )
 

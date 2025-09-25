@@ -5,10 +5,10 @@ from typing import List, Optional
 import matplotlib.colors
 import torch
 import typer
+from heavyball.utils import set_torch
 from torch import nn
 
 from lightbench.utils import Plotter, SkipConfig, loss_win_condition, trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -73,8 +73,7 @@ class Model(nn.Module):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: List[str] = typer.Option(["float64"], help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
@@ -113,6 +112,7 @@ def main(
         weight_decay,
         trials=trials,
         return_best=show_image,
+        dtype=dtype,
     )
 
     if not show_image:

@@ -1,20 +1,17 @@
 from pathlib import Path
-from typing import List
 
 import torch
 import torch.backends.opt_einsum
 import torch.nn as nn
 import typer
+from heavyball.utils import set_torch
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 
 from lightbench.utils import evaluate_test_accuracy, loss_win_condition, trial
-from heavyball.utils import set_torch
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-
-app = typer.Typer()
 
 
 class Model(nn.Module):
@@ -55,21 +52,19 @@ def set_deterministic_weights(model, seed=42):
 
 @app.command()
 def main(
-    method: List[str] = typer.Option(["qr"], help="Eigenvector method to use (for SOAP)"),
-    dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
+    dtype: str = typer.Option("float32", help="Data type to use"),
     hidden_size: int = 128,
     batch: int = 128,
     steps: int = 0,
     weight_decay: float = 0,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    test_loader: bool = None,
+    test_loader: bool = typer.Option(True, help="Whether to track test-set accuracy."),
 ):
-    dtype = [getattr(torch, d) for d in dtype]
+    dtype = getattr(torch, dtype)
 
-    # Usage in your script:
-    model = Model(hidden_size).cuda()
+    model = Model(hidden_size).to(device="cuda", dtype=dtype)
     # Load MNIST data
     transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
 
@@ -85,7 +80,7 @@ def main(
 
     test_dataset = datasets.MNIST(data_dir, train=False, download=True, transform=transform)
 
-    test_loader = torch.utils.data.DataLoader(
+    test_loader_dl = torch.utils.data.DataLoader(
         test_dataset, batch_size=batch, shuffle=False, num_workers=0, pin_memory=True
     )
 
@@ -112,11 +107,12 @@ def main(
         loss_fn,
         loss_win_condition(win_condition_multiplier * 0),
         steps,
-        opt[0],
+        opt,
         weight_decay,
         failure_threshold=10,
         trials=trials,
-        eval_callback=evaluate_test_accuracy(test_loader),
+        eval_callback=evaluate_test_accuracy(test_loader_dl) if test_loader else None,
+        dtype=dtype,
     )
 
 
