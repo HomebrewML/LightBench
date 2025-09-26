@@ -1,7 +1,7 @@
 import math
 import pathlib
 import random
-from typing import Optional
+from typing import List, Optional
 
 import matplotlib.colors
 import torch
@@ -41,7 +41,7 @@ def main(
     dtype: str = typer.Option("float64", help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
@@ -92,7 +92,8 @@ def main(
     if not show_image:
         return
 
-    model.plot(title=opt, save_path="rastrigin.png")
+    plot_title = ", ".join(opt)
+    model.plot(title=plot_title, save_path="rastrigin.png")
 
 
 if __name__ == "__main__":

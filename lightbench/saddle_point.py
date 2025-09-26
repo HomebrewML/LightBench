@@ -1,6 +1,6 @@
 import pathlib
 import random
-from typing import Optional
+from typing import List, Optional
 
 import matplotlib.colors
 import torch
@@ -45,14 +45,14 @@ def main(
     dtype: str = typer.Option("float64", help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
 ):
     dtype = getattr(torch, dtype)
-    coords = configs.get(config, {}).get("power", 1)
+    power = configs.get(config, {}).get("power", 1)
 
     # Clean up old plots
     for path in pathlib.Path(".").glob("saddle_point.png"):
@@ -66,18 +66,16 @@ def main(
 
     if show_image:
         model = Plotter(
-            lambda *x: objective(*x).add(offset).log(),
-            coords=coords,
-            xlim=(-2, 2),
-            ylim=(-2, 2),
-            normalize=8,
-            after_step=torch.exp,
+            Model(power, offset),
+            x_limits=(-2, 2),
+            y_limits=(-2, 2),
+            should_normalize=True,
         )
     else:
-        model = Model(coords, offset)
+        model = Model(power, offset)
     model.double()
 
-    trial(
+    model = trial(
         model,
         None,
         None,
@@ -88,7 +86,14 @@ def main(
         failure_threshold=3,
         trials=trials,
         dtype=dtype,
+        return_best=show_image,
     )
+
+    if not show_image:
+        return
+
+    plot_title = ", ".join(opt)
+    model.plot(title=plot_title, save_path="saddle_point.png")
 
 
 if __name__ == "__main__":

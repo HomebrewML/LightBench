@@ -1,7 +1,7 @@
 import math
 import pathlib
 import random
-from typing import Optional
+from typing import List, Optional
 
 import matplotlib.colors
 import torch
@@ -47,7 +47,7 @@ def main(
     dtype: str = typer.Option("float64", help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
@@ -67,12 +67,17 @@ def main(
     rng.shuffle(colors)
 
     if show_image:
-        model = Plotter(lambda *x: objective(*x, scale=scale).log())
+        model = Plotter(
+            Model(coords, scale=scale),
+            x_limits=(-2, 2),
+            y_limits=(-2, 2),
+            should_normalize=True,
+        )
     else:
         model = Model(coords, scale=scale)
     model.double()
 
-    trial(
+    model = trial(
         model,
         None,
         None,
@@ -83,7 +88,14 @@ def main(
         failure_threshold=3,
         trials=trials,
         dtype=dtype,
+        return_best=show_image,
     )
+
+    if not show_image:
+        return
+
+    plot_title = ", ".join(opt)
+    model.plot(title=plot_title, save_path="plateau_navigation.png")
 
 
 if __name__ == "__main__":
