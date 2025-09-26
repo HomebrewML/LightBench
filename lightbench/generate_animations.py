@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import typer
-from utils import get_optim as get_optimizer
+
+from lightbench.utils import get_optim as get_optimizer
 
 app = typer.Typer(pretty_exceptions_enable=False)
 

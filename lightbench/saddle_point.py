@@ -8,9 +8,8 @@ import torch.backends.opt_einsum
 import typer
 from heavyball.utils import set_torch
 from torch import nn
-from utils import Plotter
 
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import Plotter, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
