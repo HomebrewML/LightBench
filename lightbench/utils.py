@@ -382,6 +382,7 @@ class Objective:
         self.set_precond_init_scale = False
         self.end_time = int(os.environ.get("HEAVYBALL_BENCHMARK_TIMEOUT", 3600 * 4)) + time.time()
         self._last_loss = None
+        self.disable_early_stopping = False
 
     def _move(self, module):
         if not hasattr(module, "to"):
@@ -405,6 +406,8 @@ class Objective:
     ):
         input_kwargs = locals()
         input_kwargs.pop("self")
+        allow_validator_stop = allow_validator_stop and not self.disable_early_stopping
+        allow_win_condition = allow_win_condition and not self.disable_early_stopping
         params = tuple(float(p) for p in params)
         params_dict = self._format_params(params)
         model_template = self.model if model_override is None else model_override
@@ -472,10 +475,11 @@ class Objective:
             self.best_loss = loss
             self.best_at = self.attempt
             self.avg = np.log(np.array(params))
-        if self.best_at * 8 < self.attempt and self.attempt - self.best_at > self.warmup_trials:  # no improvements
-            raise Stop
-        if time.time() > self.end_time:  # timeout
-            raise Stop
+        if not self.disable_early_stopping:
+            if self.best_at * 8 < self.attempt and self.attempt - self.best_at > self.warmup_trials:
+                raise Stop
+            if time.time() > self.end_time:
+                raise Stop
         return target
 
     def _format_params(self, params: tuple[float, float, float, float]) -> dict[str, float]:
@@ -575,8 +579,8 @@ class Objective:
             self.group = original_group
 
     def compute_hparam_log_ema(self, beta: float = 0.9):
-        if not 0 < beta < 1:
-            raise ValueError("EMA beta must be in (0, 1).")
+        if not 0 <= beta < 1:
+            raise ValueError("EMA beta must be in [0, 1).")
         if not self.hyperparam_log_history:
             return None
         ema = self.hyperparam_log_history[0].copy()
@@ -697,8 +701,8 @@ def trial(
     group = min(group, steps)
     heavyball.utils.set_torch(einsum_strategy="heavyball")
 
-    if not 0 < ema_beta < 1:
-        raise ValueError("ema_beta must be in (0, 1).")
+    if not 0 <= ema_beta < 1:
+        raise ValueError("ema_beta must be in [0, 1).")
 
     opt_list = opt if isinstance(opt, list) else [opt]
     if not opt_list:

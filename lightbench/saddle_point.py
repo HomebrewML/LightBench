@@ -50,6 +50,7 @@ def main(
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
+    ema_beta: float = 0.9,
 ):
     dtype = getattr(torch, dtype)
     power = configs.get(config, {}).get("power", 1)
@@ -87,6 +88,7 @@ def main(
         trials=trials,
         dtype=dtype,
         return_best=show_image,
+        ema_beta=ema_beta,
     )
 
     if not show_image:

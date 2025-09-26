@@ -81,6 +81,7 @@ def main(
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
+    ema_beta: float = 0.9,
 ):
     if config is not None and config != "trivial":
         raise SkipConfig("'config' must be 'trivial'.")
@@ -113,6 +114,7 @@ def main(
         trials=trials,
         return_best=show_image,
         dtype=dtype,
+        ema_beta=ema_beta,
     )
 
     if not show_image:
