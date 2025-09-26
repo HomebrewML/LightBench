@@ -10,7 +10,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import Plotter, loss_win_condition, trial
+from lightbench.utils import Plotter, disabled_win_condition, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -78,11 +78,13 @@ def main(
         model = Model(coords, scale=scale)
     model.double()
 
+    win_condition = disabled_win_condition if show_image else loss_win_condition(win_condition_multiplier * 1e-4)
+
     model = trial(
         model,
         None,
         None,
-        loss_win_condition(win_condition_multiplier * 1e-4),
+        win_condition,
         steps,
         opt,
         weight_decay,

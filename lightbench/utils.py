@@ -597,6 +597,10 @@ class Objective:
             self.group = original_group
 
 
+def disabled_win_condition(*_args, **_kwargs):
+    return False, {}
+
+
 def loss_win_condition(target):
     def win(_model, loss: float):
         return loss <= target, {}

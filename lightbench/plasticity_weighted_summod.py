@@ -6,7 +6,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import trial
+from lightbench.utils import disabled_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -70,11 +70,13 @@ def main(
     assert steps > config["add_class_every"] * (config["classes"] - 2)
     model = Model(**config)
 
+    win_condition = disabled_win_condition if show_image else loss_win_condition(win_condition_multiplier * 1e-8)
+
     trial(
         model,
         None,
         None,
-        loss_win_condition(win_condition_multiplier * 1e-8 * (not show_image)),
+        win_condition,
         steps,
         opt,
         weight_decay,
