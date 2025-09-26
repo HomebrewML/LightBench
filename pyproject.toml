@@ -43,7 +43,7 @@ dev = [
 ]
 
 [project.scripts]
-lightbench = "lightbench.run_all_benchmarks:main"
+lightbench = "lightbench.cli:app"
 
 [project.urls]
 Source = "https://github.com/HomebrewML/LightBench"

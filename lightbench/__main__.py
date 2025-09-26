@@ -1,6 +1,6 @@
-"""Allow running `python -m lightbench` to launch the benchmark CLI."""
+"""Allow running `python -m lightbench` to launch the LightBench CLI."""
 
-from .run_all_benchmarks import main
+from .cli import app
 
 if __name__ == "__main__":
-    main()
+    app()

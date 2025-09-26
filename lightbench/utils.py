@@ -198,12 +198,16 @@ class Plotter(nn.Module):
             x = torch.linspace(x_limits[0], x_limits[1], resolution)
             y = torch.linspace(y_limits[0], y_limits[1], resolution)
             self.X, self.Y = torch.meshgrid(x, y, indexing="ij")
-            Z = torch.zeros_like(self.X)
+            Z = torch.zeros_like(self.X, device="cuda")
+            X, Y = self.X.cuda(), self.Y.cuda()
+            base = objective_fn.param.data
+            if not base.numel():
+                raise ValueError("can only plot 2d functions")
             for i in range(resolution):
                 for j in range(resolution):
-                    objective_fn.param.data[:] = torch.tensor([self.X[i, j].item(), self.Y[i, j].item()], device="cuda")
+                    base.copy_(torch.stack([X[i, j], Y[i, j]]).view_as(base))
                     Z[i, j] = self.transform(objective_fn())
-            objective_fn.param.data[:] = self.initial
+            base.copy_(self.initial)
         self.Z = Z
 
         self.trajectory = [self.initial.detach().cpu().numpy()]
@@ -225,14 +229,19 @@ class Plotter(nn.Module):
 
         plt.figure(figsize=(10, 8))
         z = self.Z
+
         if self.should_normalize:
             z = z - z.min()
             z = z / z.max()
             z = z + 1e-8
+        z = z.cpu()
+
         plt.contourf(self.X.numpy(), self.Y.numpy(), z.log().numpy(), levels=1000)
+        plt.xlim(self.x_limits)
+        plt.ylim(self.y_limits)
 
         # Plot trajectory
-        trajectory = np.array(self.trajectory)
+        trajectory = np.array(self.trajectory).reshape(-1, 2)
         plt.plot(trajectory[:, 0], trajectory[:, 1], "r.-", label="Optimization path")
         plt.plot(trajectory[0, 0], trajectory[0, 1], "go", label="Start")
         plt.plot(trajectory[-1, 0], trajectory[-1, 1], "ro", label="End")
@@ -269,8 +278,10 @@ class MultiPlotter:
             z = z - z.min()
             z = z / z.max()
             z = z + 1e-8
-
+        z = z.cpu()
         contour = ax.contourf(ref.X.numpy(), ref.Y.numpy(), z.log().numpy(), levels=1000)
+        ax.set_xlim(ref.x_limits)
+        ax.set_ylim(ref.y_limits)
 
         color_cycle = plt.rcParams.get("axes.prop_cycle")
         if color_cycle is not None:
