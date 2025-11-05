@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}LightBench{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}" />
+  </head>
+  <body>
+    <header class="lb-header">
+      <div class="lb-container">
+        <h1><a href="/">LightBench</a></h1>
+        <p>Compute-aware optimizer leaderboard</p>
+      </div>
+    </header>
+    <main class="lb-container">
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="lb-footer">
+      <div class="lb-container">
+        Hosted with ❤️ on Modal · <a href="https://github.com/HomebrewML/LightBench">Source</a>
+      </div>
+    </footer>
+  </body>
+</html>

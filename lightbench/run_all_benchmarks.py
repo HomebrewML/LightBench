@@ -14,6 +14,8 @@ from queue import Empty
 import numpy as np
 import typer
 
+from lightbench.runtime import get_device
+
 app = typer.Typer()
 
 
@@ -200,16 +202,19 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
 
     from lightbench.utils import SkipConfig
 
-    torch.cuda.set_device(worker_index % torch.cuda.device_count())
+    device = get_device()
+    if device.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.set_device(device)
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["HEAVYBALL_BENCHMARK_TIMEOUT"] = str(round(timeout))
 
     # Initialize CUDA context
-    dummy = torch.zeros(1, device="cuda")
-    del dummy
-    torch.cuda.empty_cache()
+    if device.type == "cuda" and torch.cuda.is_available():
+        dummy = torch.zeros(1, device=device)
+        del dummy
+        torch.cuda.empty_cache()
 
     difficulties = [d for d in _difficulty_order if d in difficulties]
 

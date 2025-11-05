@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Submission #{{ submission.id }} · LightBench{% endblock %}
+
+{% block content %}
+<section class="lb-card">
+  <h2>Submission details</h2>
+  <dl class="lb-definition">
+    <div><dt>Optimizer</dt><dd>{{ submission.optimizer_name }}</dd></div>
+    <div><dt>Status</dt><dd>{{ submission.status.value }}</dd></div>
+    <div><dt>Submitted</dt><dd>{{ submission.created_at }}</dd></div>
+    <div><dt>Updated</dt><dd>{{ submission.updated_at }}</dd></div>
+    <div><dt>Repository</dt><dd><a href="{{ submission.repository_url }}">{{ submission.repository_url }}</a></dd></div>
+    <div><dt>Entrypoint</dt><dd><code>{{ submission.entrypoint }}</code></dd></div>
+    <div><dt>Contact</dt><dd>{{ submission.contact_name }} · {{ submission.contact_email }}</dd></div>
+    <div><dt>Resource limits</dt><dd><code>{{ submission.resource_limits }}</code></dd></div>
+    <div><dt>Metadata</dt><dd><code>{{ submission.extra_metadata }}</code></dd></div>
+    {% if submission.last_error %}
+    <div class="lb-error"><dt>Last Error</dt><dd><pre>{{ submission.last_error }}</pre></dd></div>
+    {% endif %}
+  </dl>
+</section>
+
+<section class="lb-card">
+  <h2>Evaluation summary</h2>
+  {% if summary %}
+  <p>Completed at {{ summary.completed_at }}.</p>
+  <table class="lb-table">
+    <thead>
+      <tr><th>Metric</th><th>Value</th></tr>
+    </thead>
+    <tbody>
+      {% for key, value in summary.metrics.items() %}
+      <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if summary.metadata %}
+  <h3>Metadata</h3>
+  <table class="lb-table">
+    <thead><tr><th>Key</th><th>Value</th></tr></thead>
+    <tbody>
+      {% for key, value in summary.metadata.items() %}
+      <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% else %}
+  <p>Evaluation pending…</p>
+  {% endif %}
+</section>
+
+<section class="lb-card">
+  <h2>Leaderboard snapshot</h2>
+  <pre>{{ leaderboard | tojson(indent=2) }}</pre>
+</section>
+
+<section class="lb-card">
+  <h2>Frontier statistics</h2>
+  <pre>{{ frontier | tojson(indent=2) }}</pre>
+</section>
+{% endblock %}

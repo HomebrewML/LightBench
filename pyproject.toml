@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "heavyball>=2.0.0",
-    "torch>=2.1.0,<3.0",
+    "torch>=2.4.0,<3.0",
     "numpy>=1.26.0,<2.0",
     "typer>=0.17.4",
     "optuna>=4.5.0",
@@ -29,6 +29,10 @@ dependencies = [
     "numexpr>=2.10.2",
     "pymoo>=0.6.1",
     "cmaes>=0.12.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "jinja2>=3.1.4",
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +48,8 @@ dev = [
 
 [project.scripts]
 lightbench = "lightbench.cli:app"
+lightbench-worker = "lightbench.worker:app"
+lightbench-vast = "lightbench.vast:app"
 
 [project.urls]
 Source = "https://github.com/HomebrewML/LightBench"
@@ -56,7 +62,7 @@ where = ["."]
 include = ["lightbench*"]
 
 [tool.setuptools.package-data]
-lightbench = ["*.csv", "*.png", "*.md", "*.txt"]
+lightbench = ["*.csv", "*.png", "*.md", "*.txt", "*.html", "*.css", "*.js"]
 
 [tool.ruff]
 line-length = 120

@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}LightBench · Submit Optimizer{% endblock %}
+
+{% block content %}
+<section class="lb-card">
+  <h2>Submit a new optimizer</h2>
+  <form class="lb-form" method="post" action="{{ url_for('submit_form') }}">
+    <div class="lb-grid">
+      <label>
+        Optimizer Name
+        <input name="optimizer_name" required placeholder="my-awesome-optimizer" />
+      </label>
+      <label>
+        Contact Name
+        <input name="contact_name" required placeholder="Ada Lovelace" />
+      </label>
+      <label>
+        Contact Email
+        <input type="email" name="contact_email" required placeholder="you@example.com" />
+      </label>
+      <label>
+        Repository URL
+        <input name="repository_url" required placeholder="https://github.com/..." />
+      </label>
+      <label>
+        Entrypoint (module:callable)
+        <input name="entrypoint" required placeholder="package.module:build_optimizer" />
+      </label>
+    </div>
+    <label>
+      Description
+      <textarea name="description" rows="3" placeholder="Optional context, licenses, hardware notes…"></textarea>
+    </label>
+    <div class="lb-grid">
+      <label>
+        Resource Limits (JSON)
+        <textarea name="resource_limits_json" rows="3" placeholder='{"gpu_minutes": 120, "max_parallel": 2}'></textarea>
+      </label>
+      <label>
+        Extra Metadata (JSON)
+        <textarea name="extra_metadata_json" rows="3" placeholder='{"paper": "https://arxiv.org/..."}'></textarea>
+      </label>
+    </div>
+    <button type="submit">Submit</button>
+  </form>
+</section>
+
+<section class="lb-card">
+  <h2>Active leaderboard</h2>
+  {% if leaderboard %}
+  <table class="lb-table">
+    <thead>
+      <tr>
+        <th>Optimizer</th>
+        <th>Mean</th>
+        <th>Covariance</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for name, entry in leaderboard.items() %}
+      <tr>
+        <td>{{ name }}</td>
+        <td><code>{{ entry.mean }}</code></td>
+        <td><code>{{ entry.covariance }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No leaderboard entries yet.</p>
+  {% endif %}
+</section>
+
+<section class="lb-card">
+  <h2>Frontier statistics</h2>
+  {% if frontier %}
+  <table class="lb-table">
+    <thead>
+      <tr>
+        <th>Optimizer</th>
+        <th>Frontier Share</th>
+        <th>Prob. Non-dominated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for name, stats in frontier.items() %}
+      <tr>
+        <td>{{ name }}</td>
+        <td>{{ '%.2f'|format(stats.frontier_share) }}</td>
+        <td>{{ '%.2f'|format(stats.prob_non_dominated) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No evaluations have completed yet.</p>
+  {% endif %}
+</section>
+
+<section class="lb-card">
+  <h2>Recent submissions</h2>
+  <table class="lb-table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Name</th>
+        <th>Status</th>
+        <th>Submitted</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in submissions %}
+      <tr>
+        <td>#{{ row.submission.id }}</td>
+        <td>{{ row.submission.optimizer_name }}</td>
+        <td>{{ row.submission.status.value }}</td>
+        <td>{{ row.submission.created_at }}</td>
+        <td><a href="{{ url_for('submission_detail', submission_id=row.submission.id) }}">View</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5">No submissions yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

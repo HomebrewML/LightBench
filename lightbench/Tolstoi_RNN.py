@@ -183,7 +183,7 @@ def main(
             data_iter = iter(train_loader)
             model.reset_hidden()
             batch_data, batch_targets = next(data_iter)
-        return batch_data.cuda(), batch_targets.cuda()
+        return batch_data.cuda(non_blocking=True), batch_targets.cuda(non_blocking=True)
 
     # Custom loss function for sequence modeling
     def loss_fn(output, target):

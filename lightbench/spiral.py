@@ -89,7 +89,7 @@ def main(
     coords = (-7, -4)
 
     # Clean up old plots
-    for path in pathlib.Path(".").glob("beale.png"):
+    for path in pathlib.Path(".").glob("spiral.png"):
         path.unlink()
 
     colors = list(matplotlib.colors.TABLEAU_COLORS.values())
@@ -123,7 +123,7 @@ def main(
         return
 
     title = ", ".join(opt)
-    model.plot(title=title if len(opt) > 1 else None, save_path="beale.png")
+    model.plot(title=title if len(opt) > 1 else None, save_path="spiral.png")
 
 
 if __name__ == "__main__":

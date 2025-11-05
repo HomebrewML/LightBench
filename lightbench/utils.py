@@ -7,7 +7,8 @@ import random
 import sys
 import time
 import warnings
-from typing import Callable, Optional, Sequence
+from contextlib import contextmanager, redirect_stdout
+from typing import Any, Callable, Optional, Sequence
 
 import heavyball.utils
 import numpy as np
@@ -18,6 +19,8 @@ from heavyball.helpers import AutoSampler
 from heavyball.utils import PrecondInitError
 from torch import nn
 from torch._dynamo import config
+
+from lightbench.runtime import get_device, get_device_string
 
 config.cache_size_limit = 2**16
 
@@ -44,6 +47,75 @@ base_args = {
     "update_clipping": None,
     "delayed": True,
 }
+
+
+def _normalize_surface(z: torch.Tensor, should_normalize: bool) -> torch.Tensor:
+    if not should_normalize:
+        return z
+    normalized = z - z.min()
+    normalized = normalized / normalized.max()
+    return normalized + 1e-8
+
+
+_HEAVYBALL_WARNINGS = (
+    "logei_candidates_func is experimental",
+    "BoTorchSampler is experimental",
+    "It will be set to log2(param_count). This requires `params` to be of type list.",
+    "rank was set to",
+    "The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior.",
+)
+
+
+def _suppress_heavyball_warnings() -> None:
+    for message in _HEAVYBALL_WARNINGS:
+        heavyball.utils._ignore_warning(message)
+
+
+@contextmanager
+def _restore_caution_scaling(restore: bool, baseline) -> None:
+    try:
+        yield
+    finally:
+        if restore and baseline is not None:
+            heavyball.utils._compilable_cautioning = baseline
+
+
+def _resolve_optimizer_entry(opt_entry) -> tuple[str, Callable, dict[str, Any], bool]:
+    kwargs: dict[str, Any] = {"caution": False, "mars": False}
+    restore_caution = False
+
+    if isinstance(opt_entry, str):
+        label = opt_entry
+        name = opt_entry
+
+        def _strip(prefix: str) -> bool:
+            nonlocal name
+            if name.startswith(prefix):
+                name = name[len(prefix) :]
+                return True
+            return False
+
+        if _strip("cautious-"):
+            kwargs["caution"] = True
+        if _strip("unscaled_cautious-"):
+            heavyball.utils.disable_caution_scaling()
+            kwargs["caution"] = True
+            restore_caution = True
+        if _strip("mars-"):
+            kwargs["mars"] = True
+        if _strip("unscaled-"):
+            kwargs["unscaled"] = True
+        if _strip("adaptive-"):
+            kwargs["adaptive"] = True
+        if _strip("ortho-"):
+            kwargs["ortho_method"] = "newtonschulz-graft"
+
+        opt_callable = getattr(heavyball, name)
+    else:
+        opt_callable = opt_entry
+        label = getattr(opt_callable, "__name__", repr(opt_callable))
+
+    return label, opt_callable, kwargs, restore_caution
 
 
 def get_optim(optim: str | C.BaseOpt, params, **kwargs) -> C.BaseOpt:
@@ -228,13 +300,7 @@ class Plotter(nn.Module):
         import matplotlib.pyplot as plt
 
         plt.figure(figsize=(10, 8))
-        z = self.Z
-
-        if self.should_normalize:
-            z = z - z.min()
-            z = z / z.max()
-            z = z + 1e-8
-        z = z.cpu()
+        z = _normalize_surface(self.Z, self.should_normalize).cpu()
 
         plt.contourf(self.X.numpy(), self.Y.numpy(), z.log().numpy(), levels=1000)
         plt.xlim(self.x_limits)
@@ -273,12 +339,7 @@ class MultiPlotter:
         ref = self._reference
         fig, ax = plt.subplots(figsize=(10, 8))
 
-        z = ref.Z
-        if ref.should_normalize:
-            z = z - z.min()
-            z = z / z.max()
-            z = z + 1e-8
-        z = z.cpu()
+        z = _normalize_surface(ref.Z, ref.should_normalize).cpu()
         contour = ax.contourf(ref.X.numpy(), ref.Y.numpy(), z.log().numpy(), levels=1000)
         ax.set_xlim(ref.x_limits)
         ax.set_ylim(ref.y_limits)
@@ -294,7 +355,14 @@ class MultiPlotter:
         for idx, (label, plotter) in enumerate(self.plotters):
             color = colors[idx % len(colors)]
             trajectory = np.array(plotter.trajectory)
-            ax.plot(trajectory[:, 0], trajectory[:, 1], ".-", color=color, label=label)
+            ax.plot(
+                trajectory[:, 0],
+                trajectory[:, 1],
+                "-",
+                color=color,
+                linewidth=0.9,
+                label=label,
+            )
             ax.scatter(
                 trajectory[0, 0],
                 trajectory[0, 1],
@@ -309,7 +377,7 @@ class MultiPlotter:
                 trajectory[-1, 1],
                 color=color,
                 linewidths=1.6,
-                s=90,
+                s=130,
                 marker="x",
             )
 
@@ -320,9 +388,7 @@ class MultiPlotter:
         ax.legend()
         ax.grid(True)
 
-        label = "Log(ObjectiveValue)"
-        if ref.should_normalize:
-            label = "Log(NormalizedObjectiveValue)"
+        label = "Log(NormalizedObjectiveValue)" if ref.should_normalize else "Log(ObjectiveValue)"
         fig.colorbar(contour, ax=ax, label=label)
 
         if save_path:
@@ -432,6 +498,7 @@ class Objective:
         )
         torch_hist = torch.empty(self.group, dtype=torch.float64, device=self.device)
         validator = self.validator.new()
+        last_loss_value = float("nan")
 
         for i in range(self.steps // self.group):
             if hasattr(o, "train"):
@@ -467,15 +534,19 @@ class Objective:
             if hasattr(o, "eval"):
                 o.eval()
             with torch.no_grad():
-                for loss in torch_hist:
-                    loss_cpu = loss.item()
-                    win_condition_reached = allow_win_condition and self.win_condition(loss_cpu)
-                    if not np.isfinite(loss_cpu) or win_condition_reached:
-                        return validator.ema_states.min().item(), self.m, loss_cpu
-                    validator_triggered = validator(loss).item()
+                losses_gpu = torch_hist.detach().view(-1)
+                losses_cpu = losses_gpu.to(device="cpu", non_blocking=True)
+                if losses_cpu.numel():
+                    last_loss_value = float(losses_cpu[-1].item())
+                for loss_gpu, loss_cpu in zip(losses_gpu, losses_cpu):
+                    loss_value = float(loss_cpu.item())
+                    win_condition_reached = allow_win_condition and self.win_condition(loss_value)
+                    if not np.isfinite(loss_value) or win_condition_reached:
+                        return validator.ema_states.min().item(), self.m, loss_value
+                    validator_triggered = validator(loss_gpu).item()
                     if allow_validator_stop and validator_triggered:
-                        return validator.ema_states.min().item(), self.m, loss_cpu
-        return validator.ema_states.min().item(), self.m, loss.item()
+                        return validator.ema_states.min().item(), self.m, loss_value
+        return validator.ema_states.min().item(), self.m, last_loss_value
 
     def objective(self, params):
         self.attempt += 1
@@ -642,6 +713,8 @@ def param0_win_condition(target):
 
 def set_seed(seed: int = 0x1239121):
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
 
@@ -650,7 +723,9 @@ def cleanup():
     gc.enable()
     gc.collect()
     gc.disable()
-    with torch.cuda.device("cuda"):
+    if not torch.cuda.is_available():
+        return
+    with torch.cuda.device(get_device_string()):
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
@@ -708,7 +783,7 @@ def trial(
     eval_callback: Optional[Callable] = None,  # evaluate_test_accuracy(dataloader)
     ema_beta: float = 0.9,
     *,
-    device: torch.device | str = "cuda",
+    device: torch.device | str | None = None,
     dtype: torch.dtype | str | None = None,
 ):
     if data is None:
@@ -723,7 +798,7 @@ def trial(
     if not opt_list:
         raise ValueError("At least one optimizer must be provided.")
 
-    target_device = torch.device(device)
+    target_device = torch.device(device) if device is not None else get_device()
     target_dtype = _resolve_dtype(dtype)
 
     def _prepare_module(module):
@@ -740,14 +815,7 @@ def trial(
     else:
         base_model_template = _prepare_module(copy.deepcopy(model))
 
-    heavyball.utils._ignore_warning("logei_candidates_func is experimental")
-    heavyball.utils._ignore_warning("BoTorchSampler is experimental")
-    heavyball.utils._ignore_warning("It will be set to log2(param_count). This requires `params` to be of type list.")
-    heavyball.utils._ignore_warning("rank was set to")
-    heavyball.utils._ignore_warning(
-        "The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior."
-    )
-
+    _suppress_heavyball_warnings()
     results = []
     baseline_cautioning = getattr(heavyball.utils, "_compilable_cautioning", None)
 
@@ -755,36 +823,7 @@ def trial(
         cleanup()
         set_seed()
 
-        kwargs = {"caution": False, "mars": False}
-        restore_caution = False
-
-        if isinstance(opt_entry, str):
-            opt_label = opt_entry
-            opt_name = opt_entry
-            if opt_name.startswith("cautious-"):
-                opt_name = opt_name[len("cautious-") :]
-                kwargs["caution"] = True
-            if opt_name.startswith("unscaled_cautious-"):
-                opt_name = opt_name[len("unscaled_cautious-") :]
-                heavyball.utils.disable_caution_scaling()
-                kwargs["caution"] = True
-                restore_caution = True
-            if opt_name.startswith("mars-"):
-                opt_name = opt_name[len("mars-") :]
-                kwargs["mars"] = True
-            if opt_name.startswith("unscaled-"):
-                opt_name = opt_name[len("unscaled-") :]
-                kwargs["unscaled"] = True
-            if opt_name.startswith("adaptive-"):
-                opt_name = opt_name[len("adaptive-") :]
-                kwargs["adaptive"] = True
-            if opt_name.startswith("ortho-"):
-                opt_name = opt_name[len("ortho-") :]
-                kwargs["ortho_method"] = "newtonschulz-graft"
-            opt_callable = getattr(heavyball, opt_name)
-        else:
-            opt_callable = opt_entry
-            opt_label = getattr(opt_callable, "__name__", repr(opt_callable))
+        opt_label, opt_callable, opt_kwargs, restore_caution = _resolve_optimizer_entry(opt_entry)
 
         did_win = False
 
@@ -809,14 +848,11 @@ def trial(
             eval_callback,
             device=target_device,
             dtype=target_dtype,
-            **kwargs,
+            **opt_kwargs,
         )
 
         torch.cuda.synchronize()
-        stdout, sys.stdout = sys.stdout, sys.stderr
-
-        set_seed()
-        start_time = time.time()
+        callback_results = None
         winning_params = {
             "lr": float("nan"),
             "1mbeta1": float("nan"),
@@ -824,47 +860,48 @@ def trial(
             "1mshampoo_beta": float("nan"),
         }
         prev_best = float("inf")
-        callback_results = None
-        try:
-            sampler = AutoSampler(
-                seed=0x123125,
-                search_space={
-                    "lr": optuna.distributions.FloatDistribution(1e-7, 100, log=True),
-                    "1mbeta1": optuna.distributions.FloatDistribution(1e-5, 1, log=True),
-                    "1mbeta2": optuna.distributions.FloatDistribution(1e-7, 1, log=True),
-                    "1mshampoo_beta": optuna.distributions.FloatDistribution(1e-7, 1, log=True),
-                },
-            )
-            study = optuna.create_study(direction="minimize", sampler=sampler)
+        start_time = time.time()
 
-            def _optuna_objective(trial):
-                set_seed(0x12312)
-                lr = trial.suggest_float("lr", 1e-7, 100, log=True)
-                one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 1, log=True)
-                one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-7, 1, log=True)
-                one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-7, 1, log=True)
-                out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
-                if out < prev_best:
-                    winning_params.update({
-                        "lr": lr,
-                        "1mbeta1": one_minus_beta1,
-                        "1mbeta2": one_minus_beta2,
-                        "1mshampoo_beta": one_minus_shampoo_beta,
-                    })
-                if obj.win_condition(out):
-                    raise WinConditionMet
-                return out
+        with _restore_caution_scaling(restore_caution, baseline_cautioning):
+            with redirect_stdout(sys.stderr):
+                set_seed()
+                start_time = time.time()
+                sampler = AutoSampler(
+                    seed=0x123125,
+                    search_space={
+                        "lr": optuna.distributions.FloatDistribution(1e-7, 100, log=True),
+                        "1mbeta1": optuna.distributions.FloatDistribution(1e-5, 1, log=True),
+                        "1mbeta2": optuna.distributions.FloatDistribution(1e-7, 1, log=True),
+                        "1mshampoo_beta": optuna.distributions.FloatDistribution(1e-7, 1, log=True),
+                    },
+                )
+                study = optuna.create_study(direction="minimize", sampler=sampler)
 
-            set_seed()
-            try:
-                study.optimize(_optuna_objective, n_trials=trials)
-            except WinConditionMet:
-                pass
-            callback_results = getattr(obj, "callback_results", None)
-        finally:
-            sys.stdout = stdout
-            if restore_caution and baseline_cautioning is not None:
-                heavyball.utils._compilable_cautioning = baseline_cautioning
+                def _optuna_objective(trial):
+                    set_seed(0x12312)
+                    lr = trial.suggest_float("lr", 1e-7, 100, log=True)
+                    one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 1, log=True)
+                    one_minus_beta2 = trial.suggest_float("1mbeta2", 1e-7, 1, log=True)
+                    one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-7, 1, log=True)
+                    out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
+                    if out < prev_best:
+                        winning_params.update({
+                            "lr": lr,
+                            "1mbeta1": one_minus_beta1,
+                            "1mbeta2": one_minus_beta2,
+                            "1mshampoo_beta": one_minus_shampoo_beta,
+                        })
+                    if obj.win_condition(out):
+                        raise WinConditionMet
+                    return out
+
+                set_seed()
+                try:
+                    study.optimize(_optuna_objective, n_trials=trials)
+                except WinConditionMet:
+                    pass
+                finally:
+                    callback_results = getattr(obj, "callback_results", None)
 
         torch.cuda.synchronize()
         end_time = time.time()
@@ -931,7 +968,8 @@ def evaluate_test_accuracy(test_loader):
         with torch.no_grad():
             for data, target in test_loader:
                 if torch.cuda.is_available():
-                    data, target = data.cuda(), target.cuda()
+                    data = data.cuda(non_blocking=True)
+                    target = target.cuda(non_blocking=True)
 
                 output = model(data)
 

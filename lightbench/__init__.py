@@ -3,7 +3,11 @@
 from importlib import import_module
 from pathlib import Path
 
-__all__ = ["load", "available"]
+from .runtime import configure_environment, get_device
+
+configure_environment()
+
+__all__ = ["load", "available", "configure_environment", "get_device"]
 
 
 def load(name: str):

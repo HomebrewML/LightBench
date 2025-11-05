@@ -98,7 +98,7 @@ def main(
             data_iter = iter(train_loader)
             batch_data, batch_targets = next(data_iter)
 
-        return batch_data.cuda(), batch_targets.cuda()
+        return batch_data.cuda(non_blocking=True), batch_targets.cuda(non_blocking=True)
 
     def loss_fn(output, target):
         return F.nll_loss(output, target)

@@ -70,7 +70,7 @@ def main(
             Model(power, offset),
             x_limits=(-2, 2),
             y_limits=(-2, 2),
-            should_normalize=True,
+            should_normalize=False,
         )
     else:
         model = Model(power, offset)

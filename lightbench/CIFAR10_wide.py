@@ -132,7 +132,7 @@ def main(
         except StopIteration:
             train_iter = iter(trainloader)
             inputs, targets = next(train_iter)
-        return inputs.cuda(), targets.cuda()
+        return inputs.cuda(non_blocking=True), targets.cuda(non_blocking=True)
 
     trial(
         model,

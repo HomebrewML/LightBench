@@ -8,7 +8,9 @@ import torch
 import torch.nn as nn
 import tqdm
 
-device = "cuda"
+from lightbench.runtime import get_device_string
+
+device = get_device_string()
 heavyball.utils.compile_mode = None
 heavyball.utils.dynamic = True
 heavyball.utils.set_torch()
