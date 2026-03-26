@@ -40,6 +40,8 @@ dev = [
     "termcolor>=2.1.0",
     "typer[all]",
     "pytest>=8.3.0",
+    "build>=1.0.0",
+    "twine>=4.0.0",
 ]
 
 [project.scripts]
