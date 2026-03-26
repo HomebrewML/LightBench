@@ -17,10 +17,10 @@ the Pareto frontier, representing optimal trade-offs between these objectives.
 from typing import Optional
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import typer
 from heavyball.utils import set_torch
+from torch import nn
 
 from lightbench.utils import trial
 

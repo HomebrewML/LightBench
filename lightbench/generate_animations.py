@@ -4,11 +4,11 @@ import pathlib
 from copy import deepcopy
 from typing import List
 
-import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import typer
+from matplotlib import animation
 
 from lightbench.utils import get_optim as get_optimizer
 

@@ -7,7 +7,8 @@ import random
 import sys
 import time
 import warnings
-from typing import Callable, Optional, Sequence
+from collections.abc import Sequence
+from typing import Callable, Optional
 
 import heavyball.utils
 import numpy as np

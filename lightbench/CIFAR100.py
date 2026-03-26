@@ -1,12 +1,11 @@
 import torch
-import torch.backends.opt_einsum
-import torch.nn as nn
 import torchvision
-import torchvision.transforms as transforms
 import typer
 from heavyball.utils import set_torch
+from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
+from torchvision import transforms
 
 from lightbench.utils import evaluate_test_accuracy, loss_win_condition, trial
 
@@ -18,7 +17,7 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, in_planes, planes, stride=1):
-        super(BasicBlock, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
@@ -41,7 +40,7 @@ class BasicBlock(nn.Module):
 
 class Model(nn.Module):
     def __init__(self, num_classes: int = 10):
-        super(Model, self).__init__()
+        super().__init__()
         self.in_planes = 64
 
         self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)

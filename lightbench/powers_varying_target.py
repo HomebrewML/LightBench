@@ -1,10 +1,9 @@
 from typing import Optional
 
 import torch
-import torch.backends.opt_einsum
-import torch.nn as nn
 import typer
 from heavyball.utils import set_torch
+from torch import nn
 
 from lightbench.utils import loss_win_condition, trial
 

@@ -1,12 +1,11 @@
 import torch
-import torch.backends.opt_einsum
-import torch.nn as nn
 import torchvision
-import torchvision.transforms as transforms
 import typer
 from heavyball.utils import set_torch
+from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
+from torchvision import transforms
 
 from lightbench.utils import evaluate_test_accuracy, loss_win_condition, trial
 
@@ -16,7 +15,7 @@ set_torch()
 
 class WideBasicBlock(nn.Module):
     def __init__(self, in_planes, planes, dropout_rate, stride=1):
-        super(WideBasicBlock, self).__init__()
+        super().__init__()
         self.bn1 = nn.BatchNorm2d(in_planes)
         self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
@@ -43,7 +42,7 @@ class WideBasicBlock(nn.Module):
 
 class Model(nn.Module):
     def __init__(self, depth: int = 16, widen_factor: int = 8, dropout_rate: float = 0.0, num_classes: int = 10):
-        super(Model, self).__init__()
+        super().__init__()
         self.in_planes = 16
 
         assert (depth - 4) % 6 == 0, "Wide-resnet depth should be 6n+4"

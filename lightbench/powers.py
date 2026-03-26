@@ -2,10 +2,9 @@ import pathlib
 from typing import List, Optional
 
 import torch
-import torch.backends.opt_einsum
-import torch.nn as nn
 import typer
 from heavyball.utils import set_torch
+from torch import nn
 
 from lightbench.utils import Plotter, disabled_win_condition, loss_win_condition, trial
 

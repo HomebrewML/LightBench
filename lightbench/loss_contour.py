@@ -5,8 +5,8 @@ import heavyball
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn as nn
 import tqdm
+from torch import nn
 
 device = "cuda"
 heavyball.utils.compile_mode = None
@@ -21,7 +21,7 @@ class Sine(nn.Module):
 
 class Residual(nn.Module):
     def __init__(self, wrapped):
-        super(Residual, self).__init__()
+        super().__init__()
         self.wrapped = wrapped
 
     def forward(self, x):
@@ -54,7 +54,7 @@ class DatasetNorm(nn.Module):
 
 class MLP(nn.Module):
     def __init__(self, in_shape, out_shape, width, depth, act=Sine(), expanded: int = 256):
-        super(MLP, self).__init__()
+        super().__init__()
         layers = []
         layers.append(nn.Linear(in_shape, width))
 
@@ -62,9 +62,9 @@ class MLP(nn.Module):
             layers.append(
                 Residual(
                     nn.Sequential(
-                        nn.Linear(width, expanded),  #
-                        act,  #
-                        DatasetNorm(expanded),  #
+                        nn.Linear(width, expanded),
+                        act,
+                        DatasetNorm(expanded),
                         nn.Linear(expanded, width),
                     )
                 )

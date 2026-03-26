@@ -383,7 +383,7 @@ def main(
                 results.append(result)
                 completed += 1
                 print(
-                    f"Progress: [{completed}/{total_tasks}] {result['name']}.py - {result['opt']}: "  #
+                    f"Progress: [{completed}/{total_tasks}] {result['name']}.py - {result['opt']}: "
                     f"{'✓' if result['success'] else '✗'}"
                 )
             if prev_completed != completed:  # >= 1 task finished

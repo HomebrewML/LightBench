@@ -3,7 +3,7 @@
 from importlib import import_module
 from pathlib import Path
 
-__all__ = ["load", "available"]
+__all__ = ["available", "load"]
 
 
 def load(name: str):

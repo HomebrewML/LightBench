@@ -1,10 +1,9 @@
 from typing import Optional
 
 import torch
-import torch.backends.opt_einsum
-import torch.nn as nn
 import typer
 from heavyball.utils import set_torch
+from torch import nn
 from torch.nn import functional as F
 
 from lightbench.utils import loss_win_condition, trial
@@ -29,7 +28,7 @@ class Model(nn.Module):
         self.enc = nn.RNN(size, size, depth, batch_first=False)
         self.enc.flatten_parameters()
         self.proj = nn.Sequential(
-            nn.LayerNorm(size),  #
+            nn.LayerNorm(size),
             nn.Linear(size, 1),
         )
 

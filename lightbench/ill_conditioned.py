@@ -1,7 +1,6 @@
 from typing import Optional
 
 import torch
-import torch.backends.opt_einsum
 import typer
 from heavyball.utils import set_torch
 from torch import nn

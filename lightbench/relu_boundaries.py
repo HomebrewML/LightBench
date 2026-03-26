@@ -7,9 +7,9 @@ import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn as nn
 import typer
 from heavyball.utils import set_torch
+from torch import nn
 from torch.utils.data import DataLoader
 
 from lightbench.utils import get_optim

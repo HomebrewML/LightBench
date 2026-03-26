@@ -2,10 +2,9 @@ from pathlib import Path
 
 import torch
 import torch._dynamo
-import torch.backends.opt_einsum
-import torch.nn as nn
 import typer
 from heavyball.utils import set_torch
+from torch import nn
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 
