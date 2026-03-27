@@ -15,6 +15,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
+from lightbench import resolve_dtype
 from lightbench.utils import param_norm_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -54,7 +55,7 @@ def main(
 ):
     scale = configs.get(config, {}).get("scale", 2)
     """Run exploding gradient benchmark with specified parameters."""
-    dtype = getattr(torch, dtype)
+    dtype = resolve_dtype(dtype)
 
     model = ExplodingGradient(dim, scale)
 

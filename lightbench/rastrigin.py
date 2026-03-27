@@ -9,6 +9,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
+from lightbench import resolve_dtype
 from lightbench.utils import Plotter, SkipConfig, disabled_win_condition, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -48,11 +49,13 @@ def main(
     config: Optional[str] = None,
     ema_beta: float = 0.9,
 ):
+    if isinstance(opt, str):
+        opt = [opt]
     if config is not None and config != "trivial":
         raise SkipConfig("'config' must be 'trivial'.")
     if show_image:
         assert size == 2, "Image can only be displayed for 2D functions"
-    dtype = getattr(torch, dtype)
+    dtype = resolve_dtype(dtype)
     coords = (-2.2,) * size
 
     # Clean up old plots

@@ -48,7 +48,8 @@ def main(
     show_image: bool = False,
     ema_beta: float = 0.9,
 ):
-    dtype = [getattr(torch, d) for d in dtype]
+    if isinstance(opt, str):
+        opt = [opt]
 
     power_count = configs.get(config, {}).get("powers", powers)
 
@@ -76,7 +77,6 @@ def main(
         steps,
         opt,
         weight_decay,
-        failure_threshold=3,
         trials=trials,
         dtype=dtype,
         return_best=show_image,

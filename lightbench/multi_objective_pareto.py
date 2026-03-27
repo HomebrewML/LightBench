@@ -22,6 +22,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
+from lightbench import resolve_dtype
 from lightbench.utils import trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -144,7 +145,7 @@ def main(
         efficiency_weight = cfg.get("efficiency_weight", efficiency_weight)
         target_efficiency = cfg.get("target_efficiency", target_efficiency)
 
-    dtype = getattr(torch, dtype)
+    dtype = resolve_dtype(dtype)
     model = MultiObjectiveModel(input_dim, hidden_dim, output_dim, n_samples).cuda()
 
     def loss_fn(outputs, target):
@@ -172,7 +173,6 @@ def main(
         opt,
         weight_decay,
         trials=trials,
-        failure_threshold=3,
         dtype=dtype,
     )
 

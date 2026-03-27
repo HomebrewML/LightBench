@@ -43,7 +43,8 @@ def main(
 ):
     if config is not None and config != "trivial":
         raise SkipConfig("'config' must be 'trivial'.")
-    dtype = [getattr(torch, d) for d in dtype]
+    if isinstance(opt, str):
+        opt = [opt]
     coords = (-7, -4)
 
     # Clean up old plots

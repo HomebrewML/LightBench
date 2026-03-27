@@ -58,7 +58,6 @@ def main(
         steps * 2,
         opt,
         weight_decay,
-        failure_threshold=5,
         trials=trials,
         dtype=dtype,
     )  # Double steps, more attempts

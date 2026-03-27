@@ -7,7 +7,6 @@ import random
 import sys
 import time
 import warnings
-from collections.abc import Sequence
 from typing import Callable, Optional
 
 import heavyball.utils
@@ -19,6 +18,8 @@ from heavyball.helpers import AutoSampler
 from heavyball.utils import PrecondInitError
 from torch import nn
 from torch._dynamo import config
+
+from lightbench import resolve_dtype
 
 config.cache_size_limit = 2**16
 
@@ -57,13 +58,14 @@ def get_optim(optim: str | C.BaseOpt, params, **kwargs) -> C.BaseOpt:
 
 
 class FailureCounter:
-    def __init__(self, mapping, broadcast: int = 1):
+    def __init__(self, mapping, broadcast: int = 1, device: torch.device | str = "cuda"):
         self.mapping = mapping
         self.broadcast = broadcast
+        self.device = torch.device(device)
         max_consecutive_failures, minimal_improvement = zip(*mapping.items())
-        self.max_consecutive_failures = torch.tensor(max_consecutive_failures, dtype=torch.float64, device="cuda")
-        self.minimal_improvement = torch.tensor(minimal_improvement, dtype=torch.float64, device="cuda")
-        self.consecutive_failures = torch.zeros(len(minimal_improvement), dtype=torch.int64, device="cuda").repeat(
+        self.max_consecutive_failures = torch.tensor(max_consecutive_failures, dtype=torch.float64, device=self.device)
+        self.minimal_improvement = torch.tensor(minimal_improvement, dtype=torch.float64, device=self.device)
+        self.consecutive_failures = torch.zeros(len(minimal_improvement), dtype=torch.int64, device=self.device).repeat(
             broadcast
         )
 
@@ -74,7 +76,7 @@ class FailureCounter:
         return new_state * (1 - self.minimal_improvement.reshape(-1, 1, 1)) < old_state
 
     def new(self):
-        return FailureCounter(self.mapping, self.broadcast)
+        return FailureCounter(self.mapping, self.broadcast, self.device)
 
     def __call__(self, comparison, failure_scale: float = 1):
         failed = torch.any(comparison, axis=tuple(range(1, comparison.ndim)))
@@ -89,28 +91,29 @@ class Validator:
     ema_patience: float = 2
     ema_start: int = 0
 
-    def __init__(self, ema_mapping, global_mapping, steps, emas: int = 20):
+    def __init__(self, ema_mapping, global_mapping, steps, emas: int = 20, device: torch.device | str = "cuda"):
         self.step = 0
         self.emas = emas
+        self.device = torch.device(device)
 
-        self.ema_states = torch.zeros((self.emas,), dtype=torch.float64, device="cuda")
+        self.ema_states = torch.zeros((self.emas,), dtype=torch.float64, device=self.device)
         es = self.ema_start + 1
-        self.update_factor = 2.0 ** (-torch.arange(es, 20 + es, dtype=torch.float64, device="cuda"))
-        self.ema_failures = FailureCounter(ema_mapping)
+        self.update_factor = 2.0 ** (-torch.arange(es, 20 + es, dtype=torch.float64, device=self.device))
+        self.ema_failures = FailureCounter(ema_mapping, device=self.device)
         self.triu_indices = torch.triu_indices(self.emas, self.emas, offset=1)
 
-        self.global_min_loss = torch.tensor((float("inf"),) * steps, dtype=torch.float64, device="cuda")
-        self.global_min_failures = FailureCounter({1: 0}, steps)
+        self.global_min_loss = torch.tensor((float("inf"),) * steps, dtype=torch.float64, device=self.device)
+        self.global_min_failures = FailureCounter({1: 0}, steps, device=self.device)
 
         self.global_avg_loss = torch.zeros_like(self.global_min_loss)
         self.global_avg_step = torch.zeros_like(self.global_avg_loss)
 
-        self.weighting = torch.arange(1, 1 + self.global_min_loss.size(0), device="cuda")
+        self.weighting = torch.arange(1, 1 + self.global_min_loss.size(0), device=self.device)
         self.weighting = self.weighting.clamp(min=self.warmup).view(1, -1)
         self.weighting = functools.reduce(torch.minimum, [self.weighting**p * f for f, p in global_mapping.items()])
 
         self.seen_until = np.zeros((), dtype=np.int64)  # seen_until has to be shared
-        self.global_avg_failures = FailureCounter({1: 0}, steps)
+        self.global_avg_failures = FailureCounter({1: 0}, steps, device=self.device)
 
     def new(self):
         new = copy.copy(self)
@@ -199,8 +202,9 @@ class Plotter(nn.Module):
             x = torch.linspace(x_limits[0], x_limits[1], resolution)
             y = torch.linspace(y_limits[0], y_limits[1], resolution)
             self.X, self.Y = torch.meshgrid(x, y, indexing="ij")
-            Z = torch.zeros_like(self.X, device="cuda")
-            X, Y = self.X.cuda(), self.Y.cuda()
+            dev = objective_fn.param.device
+            Z = torch.zeros_like(self.X, device=dev)
+            X, Y = self.X.to(dev), self.Y.to(dev)
             base = objective_fn.param.data
             if not base.numel():
                 raise ValueError("can only plot 2d functions")
@@ -334,7 +338,6 @@ class MultiPlotter:
 class Objective:
     def __init__(
         self,
-        failure_threshold,
         model,
         opt: str,
         steps,
@@ -350,7 +353,6 @@ class Objective:
         dtype: torch.dtype | None = None,
         **kwargs,
     ):
-        self.failure_threshold = failure_threshold
         self.device = torch.device(device)
         self.dtype = dtype
         self.model = self._move(model)
@@ -384,6 +386,7 @@ class Objective:
             },
             {100: 2, 1600: 1},  # step_count^2 * 1 | step_count ^ 1.5 * 4 | step_count ^ 1 * 16
             steps,
+            device=self.device,
         )
         self.m = None
         self.attempt = 0
@@ -438,7 +441,7 @@ class Objective:
             if hasattr(o, "train"):
                 o.train()
 
-            if not hasattr(self, "test_accuracies"):
+            if not hasattr(self, "callback_results"):
                 self.callback_results = []
 
             if self.eval_callback is not None:
@@ -621,22 +624,18 @@ def loss_win_condition(target):
 
 
 def param_norm_win_condition(target, offset):
-    target = torch.full((), target, device="cuda")
-
     def win(model, loss):
         with torch.no_grad():
             norm = model.param.add(offset).square().mean().sqrt()
-            return (norm < target).item(), {}
+            return norm.item() < target, {}
 
     return win
 
 
 def param0_win_condition(target):
-    target = torch.full((), target, device="cuda")
-
     def win(model, loss):
         with torch.no_grad():
-            return (model.param[0] < target).item(), {}
+            return model.param[0].item() < target, {}
 
     return win
 
@@ -651,45 +650,13 @@ def cleanup():
     gc.enable()
     gc.collect()
     gc.disable()
-    with torch.cuda.device("cuda"):
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
 
 def _none_data():
     return None, None
-
-
-def _resolve_dtype(value):
-    """Normalize dtype specifications to a torch.dtype or return None.
-
-    Accepts string names or torch.dtype objects. Sequences are only supported
-    when they contain a single element; providing multiple candidates is
-    considered an error to avoid silently ignoring inputs.
-    """
-    if value is None:
-        return None
-
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        value = list(value)
-        if not value:
-            return None
-        if len(value) > 1:
-            raise ValueError(f"Expected a single dtype, received {len(value)} values.")
-        value = value[0]
-
-    if isinstance(value, str):
-        try:
-            return getattr(torch, value)
-        except AttributeError as exc:  # pragma: no cover - defensive guard
-            raise ValueError(f"Unknown torch dtype '{value}'") from exc
-
-    if isinstance(value, torch.dtype):
-        return value
-
-    raise TypeError(f"Unsupported dtype specification: {type(value)!r}")
 
 
 def trial(
@@ -701,7 +668,6 @@ def trial(
     opt,
     weight_decay,
     trials=10,
-    failure_threshold=3,
     group=256,
     return_best: bool = False,
     warmup_trial_pct: float = 1,
@@ -725,7 +691,7 @@ def trial(
         raise ValueError("At least one optimizer must be provided.")
 
     target_device = torch.device(device)
-    target_dtype = _resolve_dtype(dtype)
+    target_dtype = resolve_dtype(dtype)
 
     def _prepare_module(module):
         if not hasattr(module, "to"):
@@ -797,7 +763,6 @@ def trial(
 
         base_model = copy.deepcopy(base_model_template)
         obj = Objective(
-            failure_threshold,
             base_model,
             opt_callable,
             steps,
@@ -813,7 +778,8 @@ def trial(
             **kwargs,
         )
 
-        torch.cuda.synchronize()
+        if target_device.type == "cuda":
+            torch.cuda.synchronize()
         stdout, sys.stdout = sys.stdout, sys.stderr
 
         set_seed()
@@ -839,6 +805,7 @@ def trial(
             study = optuna.create_study(direction="minimize", sampler=sampler)
 
             def _optuna_objective(trial):
+                nonlocal prev_best
                 set_seed(0x12312)
                 lr = trial.suggest_float("lr", 1e-7, 100, log=True)
                 one_minus_beta1 = trial.suggest_float("1mbeta1", 1e-5, 1, log=True)
@@ -846,6 +813,7 @@ def trial(
                 one_minus_shampoo_beta = trial.suggest_float("1mshampoo_beta", 1e-7, 1, log=True)
                 out = obj.objective((lr, one_minus_beta1, one_minus_beta2, one_minus_shampoo_beta))
                 if out < prev_best:
+                    prev_best = out
                     winning_params.update({
                         "lr": lr,
                         "1mbeta1": one_minus_beta1,
@@ -867,7 +835,8 @@ def trial(
             if restore_caution and baseline_cautioning is not None:
                 heavyball.utils._compilable_cautioning = baseline_cautioning
 
-        torch.cuda.synchronize()
+        if target_device.type == "cuda":
+            torch.cuda.synchronize()
         end_time = time.time()
 
         ema_logs = obj.compute_hparam_log_ema(beta=ema_beta)
@@ -888,10 +857,11 @@ def trial(
         if callback_results:
             callback_msg = f" | Callback Results: {callback_results}"
 
+        win_msg = " | Win: Yes" if did_win else ""
         print(
             f"[{opt_label}] Took: {end_time - start_time} | Attempt: {obj.attempt} | "
             f"{opt_label}(lr={_fmt(winning_params['lr'])}, betas=({1 - winning_params['1mbeta1']:.3f}, {1 - winning_params['1mbeta2']:.4f}), "
-            f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}){ema_msg} | Best Loss: {obj.best_loss}{callback_msg}"
+            f"shampoo_beta={1 - winning_params['1mshampoo_beta']:.3f}){ema_msg} | Best Loss: {obj.best_loss}{callback_msg}{win_msg}"
         )
 
         if return_best:
@@ -922,33 +892,26 @@ def trial(
 
 def evaluate_test_accuracy(test_loader):
     def _fn(model):
-        # Save the current training state
         was_training = model.training
-
         model.eval()
+        dev = next(model.parameters()).device
         correct = 0
         total = 0
 
         with torch.no_grad():
             for data, target in test_loader:
-                if torch.cuda.is_available():
-                    data, target = data.cuda(), target.cuda()
-
+                data, target = data.to(dev), target.to(dev)
                 output = model(data)
 
-                # Handle different output shapes
-                if output.dim() > 2:  # Sequence modeling: [batch, seq_len, vocab_size]
-                    pred = output.argmax(dim=-1)  # [batch, seq_len]
-                    pred_flat = pred.view(-1)
-                    target_flat = target.view(-1)
-                    correct += pred_flat.eq(target_flat).sum().item()
-                    total += target_flat.numel()
-                else:  # Regular classification: [batch, num_classes]
-                    pred = output.argmax(dim=1, keepdim=True)
-                    correct += pred.eq(target.view_as(pred)).sum().item()
-                    total += target.numel()
+                if output.dim() > 2:
+                    pred = output.argmax(dim=-1).view(-1)
+                    target = target.view(-1)
+                else:
+                    pred = output.argmax(dim=1)
 
-        # Restore the original training state
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                total += target.numel()
+
         model.train(was_training)
         return correct / total
 

@@ -7,6 +7,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
+from lightbench import resolve_dtype
 from lightbench.utils import evaluate_test_accuracy, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -83,7 +84,7 @@ def main(
     trials: int = 10,
     test_loader: bool = typer.Option(True, help="Whether to track test-set accuracy."),
 ):
-    dtype = getattr(torch, dtype)
+    dtype = resolve_dtype(dtype)
     model = Model(num_classes).to(device="cuda", dtype=dtype)
 
     # CIFAR-100 data loading with image augmentation
@@ -129,7 +130,6 @@ def main(
         steps,
         opt,
         weight_decay,
-        failure_threshold=10,
         trials=trials,
         eval_callback=evaluate_test_accuracy(test_loader_dl) if test_loader else None,
         dtype=dtype,

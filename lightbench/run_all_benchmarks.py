@@ -1,3 +1,4 @@
+import inspect
 import itertools
 import multiprocessing
 import os
@@ -7,12 +8,12 @@ import sys
 import time
 import traceback
 from datetime import datetime
-from importlib import import_module
-from pathlib import Path
 from queue import Empty
 
 import numpy as np
 import typer
+
+from lightbench.utils import SkipConfig
 
 app = typer.Typer()
 
@@ -21,53 +22,18 @@ def last_match(pattern, text):
     matches = re.findall(pattern, text)
     if not matches:
         return None
-    last = matches[-1]
-    return float(last)
+    return float(matches[-1])
 
 
 def parse_config(text):
     match = re.search(r"Attempt: \d+ \| (.*?) \| Best Loss:", text)
-    if match:
-        return match.group(1).strip()
-    return ""
+    return match.group(1).strip() if match else ""
 
 
-_module_cache = {}
-_package_name = __package__
-_package_dir = Path(__file__).resolve().parent
-
-try:
-    from lightbench.utils import SkipConfig
-except ModuleNotFoundError:  # script execution without package context
-    sys.path.insert(0, str(_package_dir.parent))
-    from lightbench.utils import SkipConfig
-
-
-def _load_module(module_name: str):
-    if module_name in _module_cache:
-        return _module_cache[module_name]
-
-    if _package_name:
-        module = import_module(f"{_package_name}.{module_name}")
-    else:
-        project_root = _package_dir.parent
-        if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))
-        try:
-            module = import_module(f"{_package_dir.name}.{module_name}")
-        except ModuleNotFoundError:
-            if str(_package_dir) not in sys.path:
-                sys.path.insert(0, str(_package_dir))
-            module = import_module(module_name)
-
-    _module_cache[module_name] = module
-    return module
-
-
-def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
+def run_benchmark(name, opt, steps, dtype, trials, seed, difficulty):
     import io
-    import time
 
+    import lightbench
     import torch
 
     stdout = sys.stdout
@@ -77,24 +43,24 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-        module_name = script.replace(".py", "")
-        module = _load_module(module_name)
+        module = lightbench.load(name)
 
         torch.manual_seed(seed)
         np.random.seed(seed)
         random.seed(seed)
 
-        # Build arguments
         arguments = {
-            "dtype": [dtype],
+            "dtype": dtype,
             "steps": steps,
             "weight_decay": 0,
-            "opt": [opt],
+            "opt": opt,
             "trials": trials,
             "win_condition_multiplier": 1.0,
             "config": difficulty,
         }
-        # Run the main function
+        sig = inspect.signature(module.main)
+        if not any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+            arguments = {k: v for k, v in arguments.items() if k in sig.parameters}
         module.main(**arguments)
     except SkipConfig:
         raise
@@ -107,20 +73,15 @@ def run_benchmark(script, opt, steps, dtype, trials, seed, difficulty):
     finally:
         sys.stdout = stdout
 
-    # Parse output
-    success = "Successfully found the minimum." in output
-
+    success = "Win: Yes" in output
     runtime = last_match(r"Took: ([0-9.]+)", output)
     loss = last_match(r"Best Loss: ([0-9.e\-+]+)", output)
     attempts = int(last_match(r"Attempt: ([0-9]+)", output) or trials)
-
     total_runtime = time.time() - start_time
-
-    # Parse winning config string
     config_str = parse_config(output)
 
     return {
-        "name": f"{script.replace('.py', '')}-{difficulty}",
+        "name": f"{name}-{difficulty}",
         "opt": opt,
         "success": success,
         "runtime": float(runtime or total_runtime),
@@ -198,34 +159,30 @@ _difficulty_order = ["trivial", "easy", "medium", "hard", "extreme", "nightmare"
 def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: int):
     import torch
 
-    from lightbench.utils import SkipConfig
-
     torch.cuda.set_device(worker_index % torch.cuda.device_count())
     torch.set_num_threads(1)
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["HEAVYBALL_BENCHMARK_TIMEOUT"] = str(round(timeout))
 
-    # Initialize CUDA context
     dummy = torch.zeros(1, device="cuda")
     del dummy
     torch.cuda.empty_cache()
 
     difficulties = [d for d in _difficulty_order if d in difficulties]
 
-    while True:
-        try:
+    try:
+        while True:
             try:
-                script, o, steps, dtype, trials, seed = task_queue.get(timeout=0.1)
+                name, o, steps, dtype, trials, seed = task_queue.get(timeout=0.1)
             except Empty:
-                result_queue.put(None)
                 return
-            script, *diff = script.split("===")
+            name, *diff = name.split("===")
             inner_difficulties = diff if diff else difficulties.copy()
             for _ in range(len(inner_difficulties)):
                 d = inner_difficulties.pop(0)
                 try:
-                    result = run_benchmark(script, o, steps, dtype, trials, seed, d)
+                    result = run_benchmark(name, o, steps, dtype, trials, seed, d)
                     exc = ""
                 except Exception as e:
                     result = isinstance(e, SkipConfig)
@@ -240,10 +197,9 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
                 else:
                     inner_difficulties.insert(0, d)
 
-                # model failed this task - no need to try harder ones
                 for d_ in inner_difficulties:
                     result = {
-                        "name": f"{script.replace('.py', '')}-{d_}",
+                        "name": f"{name}-{d_}",
                         "opt": o,
                         "success": False,
                         "runtime": timeout if "timed out" in exc else 0,
@@ -255,10 +211,10 @@ def worker(task_queue, result_queue, worker_index, difficulties: list, timeout: 
                     }
                     result_queue.put(result)
                 break
-
-        except Exception:
-            traceback.print_exc()
-            break
+    except Exception:
+        traceback.print_exc()
+    finally:
+        result_queue.put(None)
 
 
 @app.command()
@@ -279,59 +235,9 @@ def main(
 ):
     multiprocessing.set_start_method("spawn", force=True)  # spawn appears to be safer with CUDA MPS
 
-    benchmarks = [
-        "beale.py",
-        "rosenbrock.py",
-        "rastrigin.py",
-        "quadratic_varying_scale.py",
-        "quadratic_varying_target.py",
-        "noisy_matmul.py",
-        "xor_sequence.py",
-        "xor_digit.py",
-        "xor_spot.py",
-        "xor_sequence_rnn.py",
-        "xor_digit_rnn.py",
-        "xor_spot_rnn.py",
-        "saddle_point.py",
-        "discontinuous_gradient.py",
-        "wide_linear.py",
-        "minimax.py",
-        "plateau_navigation.py",
-        "scale_invariant.py",
-        "momentum_utilization.py",
-        "batch_size_scaling.py",
-        "sparse_gradient.py",
-        "layer_wise_scale.py",
-        "parameter_scale.py",
-        "gradient_delay.py",
-        "adversarial_gradient.py",
-        "dynamic_landscape.py",
-        "multi_objective_pareto.py",
-        "class_imbalance_rare.py",
-        "memory_constrained.py",
-        "transfer_domain_shift.py",
-        "plasticity_summod.py",
-        "plasticity_weighted_summod.py",
-        "generalization_summod.py",
-        "generalization_weighted_summod.py",
-        "sparse_parameters.py",
-        "quadratic_flip.py",
-        "quadratic_outliers.py",
-        "quadratic_sparse.py",
-        "quadratic_quantized_gradient.py",
-        "absolute_varying_scale.py",
-        "quadratic_quantization_aware_training.py",
-        "vanishing_gradient.py",
-        "ill_conditioned.py",
-        "ill_conditioned_mismatched.py",
-        "gradient_noise_scale_instantaneous_brown.py",
-        "gradient_noise_scale_temporal_brown.py",
-        "gradient_noise_scale_white.py",
-        "gradient_noise_scale_heavy_tailed.py",
-        "constrained_optimization_relu.py",
-        "constrained_optimization_log.py",
-        "non_markovian.py",
-    ]
+    from lightbench import available
+
+    benchmarks = available()
 
     if mars:
         opt = ["mars-" + o for o in opt]
@@ -344,12 +250,12 @@ def main(
     result_queue = multiprocessing.Queue()
 
     total_tasks = 0
-    for script, o, i in itertools.product(benchmarks, opt, range(seeds)):
+    for name, o, i in itertools.product(benchmarks, opt, range(seeds)):
         if full_parallel:
             for d in difficulties:
-                task_queue.put((f"{script}==={d}", o, steps, dtype, trials, i))
+                task_queue.put((f"{name}==={d}", o, steps, dtype, trials, i))
         else:
-            task_queue.put((script, o, steps, dtype, trials, i))
+            task_queue.put((name, o, steps, dtype, trials, i))
         total_tasks += len(difficulties)
 
     if not total_tasks:
@@ -383,7 +289,7 @@ def main(
                 results.append(result)
                 completed += 1
                 print(
-                    f"Progress: [{completed}/{total_tasks}] {result['name']}.py - {result['opt']}: "
+                    f"Progress: [{completed}/{total_tasks}] {result['name']} - {result['opt']}: "
                     f"{'✓' if result['success'] else '✗'}"
                 )
             if prev_completed != completed:  # >= 1 task finished

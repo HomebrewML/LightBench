@@ -138,7 +138,6 @@ def main(
         opt,
         weight_decay,
         trials=trials,
-        failure_threshold=4,
         dtype=dtype,
     )
 

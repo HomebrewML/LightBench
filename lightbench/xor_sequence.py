@@ -6,6 +6,7 @@ from heavyball.utils import set_torch
 from torch import nn
 from torch.nn import functional as F
 
+from lightbench import resolve_dtype
 from lightbench.utils import loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -62,7 +63,7 @@ def main(
 ):
     length = configs.get(config, {}).get("length", length)
 
-    dtype = getattr(torch, dtype)
+    dtype = resolve_dtype(dtype)
     torch.manual_seed(0x1239121)
     model = Model(size, depth).cuda()
 
@@ -81,7 +82,6 @@ def main(
         steps,
         opt,
         weight_decay,
-        failure_threshold=10,
         trials=trials,
         dtype=dtype,
     )

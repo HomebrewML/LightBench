@@ -9,7 +9,7 @@ HeavyBall.
 ## Highlights
 
 - 50+ ready-to-run tasks spanning convex, non-convex, multi-objective, and data-imbalanced regimes.
-- Typer-powered CLI apps with consistent flags for optimizers, schedules, logging, and hardware placement.
+- Typer-powered CLI with consistent flags for optimizers, dtype, difficulty, and termination criteria.
 - Reproducible harness that streams metrics to stdout and captures Markdown reports and CSV artifacts by default.
 - Ships with helper utilities and visualizations, from the original HeavyBall benchmark module.
 
@@ -63,37 +63,35 @@ python -m lightbench.class_imbalance_rare --opt Adam
 python -m lightbench.xor_sequence --help
 ```
 
-All modules expose consistent flags for optimizers (`--opt`), device placement (`--device cuda:0`), seeds, and
-termination criteria.
+All modules expose consistent flags for optimizers (`--opt`), seeds, and termination criteria.
 
 ## Benchmark Families
 
 LightBench organizes tasks into thematic groups to help you target problem classes quickly:
 
-- **Deterministic classics**: Rosenbrock, Beale, Himmelblau, and other analytic surfaces for rapid optimizer sanity checks.
-- **Stochastic data pipelines**: Class imbalance, noisy regression, and streaming reinforcement learning probes stress
-  variance handling and adaptive scheduling.
+- **Deterministic classics**: Rosenbrock, Beale, Rastrigin, and other analytic surfaces for rapid optimizer sanity checks.
+- **Stochastic data pipelines**: Class imbalance, noisy matmul, and transfer tasks stress variance handling and adaptive
+  scheduling.
 - **Multi-objective and constrained**: Pareto, frontier, and penalty-based suites validate trade-off handling.
 - **High-memory stressors**: Sparse attention, sequence XOR, and large-batch language workloads surface allocator and
   checkpointing regressions.
 - **AutoML integrations**: Seamless Optuna/OptunaHub hooks enable hyperparameter sweeps and collaborative experiment
   sharing.
 
-Use the Python API to enumerate available tasks and metadata:
+Use the Python API to enumerate and load tasks:
 
 ```python
 import lightbench
 
-print(lightbench.available())
+lightbench.available()       # list all benchmark names
+lightbench.load("beale")     # import a benchmark module
+lightbench.resolve_dtype("float32")  # normalize dtype specs
 ```
 
 ## Outputs & Artifacts
 
-- Markdown summaries: `benchmark_results.md`
-- Tabular metrics: `*/metrics.csv`
-- Optional plots and GIFs from helper scripts in `lightbench/tools`
-
-Pass `--report-dir <path>` to direct outputs elsewhere, or `--no-write` to rely solely on stdout.
+- Markdown reports: `benchmark_results.md`
+- Optional plots and GIFs from bundled helper scripts
 
 ## Integrating With HeavyBall
 
@@ -107,7 +105,6 @@ deployment steps, dataset descriptions, and canonical results.
 ## Repository Layout
 
 - `lightbench/`: Benchmarks, Typer CLIs, utilities, and helper scripts.
-- `lightbench/data/`: Bundled CSVs, Markdown reports, and supporting assets distributed with the wheel.
 - `pyproject.toml`: Project metadata, dependencies, and console-script definitions.
 - `README.md`: You are here.
 

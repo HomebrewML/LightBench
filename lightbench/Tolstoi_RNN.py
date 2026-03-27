@@ -8,6 +8,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
+from lightbench import resolve_dtype
 from lightbench.utils import evaluate_test_accuracy, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -139,7 +140,7 @@ def main(
     seq_length: int = 50,
     test_loader: bool = typer.Option(True, help="Whether to track test-set accuracy."),
 ):
-    dtype = getattr(torch, dtype)
+    dtype = resolve_dtype(dtype)
 
     # Download and prepare data
     data_dir = Path(__file__).parent / "data"
@@ -209,7 +210,6 @@ def main(
         steps,
         opt,
         weight_decay,
-        failure_threshold=10,
         trials=trials,
         eval_callback=evaluate_test_accuracy(test_loader_dl) if test_loader else None,
         dtype=dtype,

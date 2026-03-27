@@ -8,6 +8,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
+from lightbench import resolve_dtype
 from lightbench.utils import Plotter, disabled_win_condition, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -51,7 +52,9 @@ def main(
     config: Optional[str] = None,
     ema_beta: float = 0.9,
 ):
-    dtype = getattr(torch, dtype)
+    if isinstance(opt, str):
+        opt = [opt]
+    dtype = resolve_dtype(dtype)
     power = configs.get(config, {}).get("power", 1)
 
     # Clean up old plots
@@ -85,7 +88,6 @@ def main(
         steps,
         opt,
         weight_decay,
-        failure_threshold=3,
         trials=trials,
         dtype=dtype,
         return_best=show_image,

@@ -14,6 +14,7 @@ from heavyball.utils import set_torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from lightbench import resolve_dtype
 from lightbench.utils import get_optim
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -123,7 +124,11 @@ def main(
     eval_samples: int = 1024,
     printervall: int = 1000,
 ):
-    dtype = [getattr(torch, d) for d in dtype]
+    if isinstance(dtype, str):
+        dtype = [dtype]
+    if isinstance(opt, str):
+        opt = [opt]
+    dtype = [resolve_dtype(d) for d in dtype]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Clean up old plots

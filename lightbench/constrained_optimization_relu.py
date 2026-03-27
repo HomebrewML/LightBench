@@ -69,7 +69,6 @@ def main(
         steps,
         opt,
         weight_decay,
-        failure_threshold=3,
         trials=trials,
         group=32,  # Smaller group size might be better for simple problems
         dtype=dtype,

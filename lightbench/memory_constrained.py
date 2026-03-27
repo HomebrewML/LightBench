@@ -18,6 +18,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
+from lightbench import resolve_dtype
 from lightbench.utils import trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -163,7 +164,7 @@ def main(
         gradient_accumulation_steps = cfg.get("gradient_accumulation_steps", gradient_accumulation_steps)
         activation_checkpointing = cfg.get("activation_checkpointing", activation_checkpointing)
 
-    dtype = getattr(torch, dtype)
+    dtype = resolve_dtype(dtype)
     model = MemoryConstrainedModel(
         model_size, batch_size, memory_limit_mb, gradient_accumulation_steps, activation_checkpointing
     ).cuda()
@@ -190,7 +191,6 @@ def main(
         opt,
         weight_decay,
         trials=trials,
-        failure_threshold=3,
         dtype=dtype,
     )
 

@@ -57,7 +57,6 @@ def main(
         steps,
         opt,
         weight_decay,
-        failure_threshold=7,
         trials=trials,
         dtype=dtype,
     )  # More attempts for adversarial case

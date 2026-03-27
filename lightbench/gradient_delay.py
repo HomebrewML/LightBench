@@ -6,6 +6,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
+from lightbench import resolve_dtype
 from lightbench.utils import loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -60,7 +61,7 @@ def main(
     config: Optional[str] = None,
 ):
     max_delay = configs.get(config, {}).get("max_delay", 4)
-    dtype = getattr(torch, dtype)
+    dtype = resolve_dtype(dtype)
     model = Model(max_delay).cuda().double()
 
     trial(
@@ -71,7 +72,6 @@ def main(
         steps * 2,
         opt,
         weight_decay,
-        failure_threshold=5,
         trials=trials,
         dtype=dtype,
     )  # Double steps, more attempts

@@ -61,7 +61,6 @@ def main(
         steps,
         opt,
         weight_decay=weight_decay,
-        failure_threshold=2,
         trials=trials,
         dtype=dtype,
     )
