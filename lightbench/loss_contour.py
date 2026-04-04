@@ -117,9 +117,9 @@ def train_and_generate_frames(
     y_train = y_train.view(-1, 1).to(device).float()
 
     optimizers = {
-        "ForeachSOAP": heavyball.ForeachSOAP(model.parameters(), lr=lr),
-        "PaLMForeachSOAP": heavyball.PaLMForeachSOAP(model.parameters(), lr=lr),
-        "PrecondScheduleForeachSOAP": heavyball.PrecondScheduleForeachSOAP(model.parameters(), lr=lr),
+        "SOAP": heavyball.SOAP(model.parameters(), lr=lr),
+        "SOAPNAdam": heavyball.SOAPNAdam(model.parameters(), lr=lr),
+        "SOAPAdEMAMix": heavyball.SOAPAdEMAMix(model.parameters(), lr=lr),
     }
     criterion = nn.BCEWithLogitsLoss()
 

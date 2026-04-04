@@ -1,8 +1,6 @@
 import pathlib
-import random
 from typing import List, Optional
 
-import matplotlib.colors
 import torch
 import typer
 from heavyball.utils import set_torch
@@ -45,7 +43,7 @@ def main(
     dtype: str = typer.Option("float64", help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: List[str] = typer.Option(["SOAP"], help="Optimizers to use"),
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
@@ -60,10 +58,6 @@ def main(
     # Clean up old plots
     for path in pathlib.Path(".").glob("saddle_point.png"):
         path.unlink()
-
-    colors = list(matplotlib.colors.TABLEAU_COLORS.values())
-    rng = random.Random(0x1239121)
-    rng.shuffle(colors)
 
     offset = win_condition_multiplier * 10
 

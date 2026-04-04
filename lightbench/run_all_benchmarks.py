@@ -13,7 +13,7 @@ from queue import Empty
 import numpy as np
 import typer
 
-from lightbench.utils import SkipConfig
+from lightbench.utils import SkipConfig, parse_opt_name
 
 app = typer.Typer()
 
@@ -94,18 +94,10 @@ def run_benchmark(name, opt, steps, dtype, trials, seed, difficulty):
 
 
 def opt_to_config(opt):
-    caution = "No"
-    mars = "No"
-    if opt.startswith("cautious-"):
-        opt = opt[len("cautious-") :]
-        caution = "Yes"
-    if opt.startswith("unscaled_cautious-"):
-        opt = opt[len("unscaled_cautious-") :]
-        caution = "Unscaled"
-    if opt.startswith("mars-"):
-        opt = opt[len("mars-") :]
-        mars = "Yes"
-    return opt, caution, mars
+    name, kwargs = parse_opt_name(opt)
+    caution = "Unscaled" if kwargs.get("_unscale_caution") else ("Yes" if kwargs.get("caution") else "No")
+    mars = "Yes" if kwargs.get("mars") else "No"
+    return name, caution, mars
 
 
 def write_progress(results, opt, output):

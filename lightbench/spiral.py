@@ -1,8 +1,6 @@
 import pathlib
-import random
 from typing import List, Optional
 
-import matplotlib.colors
 import torch
 import typer
 from heavyball.utils import set_torch
@@ -76,7 +74,7 @@ def main(
     dtype: List[str] = typer.Option(["float64"], help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: List[str] = typer.Option(["SOAP"], help="Optimizers to use"),
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
@@ -90,12 +88,8 @@ def main(
     coords = (-7, -4)
 
     # Clean up old plots
-    for path in pathlib.Path(".").glob("beale.png"):
+    for path in pathlib.Path(".").glob("spiral.png"):
         path.unlink()
-
-    colors = list(matplotlib.colors.TABLEAU_COLORS.values())
-    rng = random.Random(0x1239121)
-    rng.shuffle(colors)
 
     if show_image:
         lim = max(map(abs, coords)) * 1.5  # assume it's perfectly on a diagonal
@@ -124,7 +118,7 @@ def main(
         return
 
     title = ", ".join(opt)
-    model.plot(title=title if len(opt) > 1 else None, save_path="beale.png")
+    model.plot(title=title if len(opt) > 1 else None, save_path="spiral.png")
 
 
 if __name__ == "__main__":

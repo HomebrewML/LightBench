@@ -163,7 +163,7 @@ def main(
     freeze_layers: int = 2,
     steps: int = 1500,
     weight_decay: float = 0.005,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 20,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,

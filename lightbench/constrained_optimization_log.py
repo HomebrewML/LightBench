@@ -53,7 +53,7 @@ def main(
     steps: int = 200,
     # Increased steps slightly
     weight_decay: float = 0,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 50,  # Reduced trials slightly for faster testing
     win_condition_multiplier: float = 1.0,  # Not used directly, but kept for consistency
     config: Optional[str] = None,

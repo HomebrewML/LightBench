@@ -145,7 +145,7 @@ def main(
     activation_checkpointing: bool = True,
     steps: int = 500,
     weight_decay: float = 0.01,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 15,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,

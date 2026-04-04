@@ -111,7 +111,7 @@ def main(
     method: str = typer.Option("qr", help="Eigenvector method to use (for SOAP)"),
     dtype: List[str] = typer.Option(["float32"], help="Data type to use"),
     opt: List[str] = typer.Option(
-        ["ForeachSOAP", "PaLMForeachSOAP", "PrecondScheduleForeachSOAP"], help="Optimizers to use"
+        ["SOAP", "SOAPNAdam", "SOAPAdEMAMix"], help="Optimizers to use"
     ),
     steps: int = 100,
     batch_size: int = 32,

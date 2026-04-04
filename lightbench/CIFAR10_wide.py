@@ -91,7 +91,7 @@ def main(
     batch: int = 128,
     steps: int = 2000,
     weight_decay: float = 5e-4,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: str = typer.Option("SOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
     test_loader: bool = typer.Option(True, help="Whether to track test-set accuracy."),

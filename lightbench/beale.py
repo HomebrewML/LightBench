@@ -1,8 +1,6 @@
 import pathlib
-import random
 from typing import List, Optional
 
-import matplotlib.colors
 import torch
 import typer
 from heavyball.utils import set_torch
@@ -34,7 +32,7 @@ def main(
     dtype: List[str] = typer.Option(["float64"], help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
-    opt: List[str] = typer.Option(["ForeachSOAP"], help="Optimizers to use"),
+    opt: List[str] = typer.Option(["SOAP"], help="Optimizers to use"),
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
@@ -43,17 +41,10 @@ def main(
 ):
     if config is not None and config != "trivial":
         raise SkipConfig("'config' must be 'trivial'.")
-    if isinstance(opt, str):
-        opt = [opt]
-    coords = (-7, -4)
+    coords = (-6, -4)
 
-    # Clean up old plots
     for path in pathlib.Path(".").glob("beale.png"):
         path.unlink()
-
-    colors = list(matplotlib.colors.TABLEAU_COLORS.values())
-    rng = random.Random(0x1239121)
-    rng.shuffle(colors)
 
     if show_image:
         model = Plotter(Model(coords), x_limits=(-8, 2), y_limits=(-8, 2), should_normalize=True)
@@ -64,22 +55,12 @@ def main(
     win_condition = disabled_win_condition if show_image else loss_win_condition(win_condition_multiplier * 1e-8)
 
     model = trial(
-        model,
-        None,
-        None,
-        win_condition,
-        steps,
-        opt,
-        weight_decay,
-        trials=trials,
-        return_best=show_image,
-        ema_beta=ema_beta,
-        dtype=dtype,
+        model, None, None, win_condition, steps, opt, weight_decay,
+        trials=trials, return_best=show_image, ema_beta=ema_beta, dtype=dtype,
     )
 
     if not show_image:
         return
-
     model.plot(save_path="beale.png")
 
 

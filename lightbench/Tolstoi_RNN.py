@@ -134,7 +134,7 @@ def main(
     batch: int = 50,
     steps: int = 0,
     weight_decay: float = 0,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: str = typer.Option("SOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
     seq_length: int = 50,

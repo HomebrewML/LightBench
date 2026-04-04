@@ -46,7 +46,7 @@ def main(
     dtype: str = typer.Option("float32", help="Data type to use"),
     steps: int = 100,
     weight_decay: float = 0,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: str = typer.Option("SOAP", help="Optimizers to use"),
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,

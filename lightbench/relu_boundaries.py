@@ -205,7 +205,7 @@ def main(
     output_format: str = typer.Option("mp4", help="Output format: mp4 or gif"),
     fps: int = typer.Option(10, help="Frames per second in output video"),
     seed: int = typer.Option(42, help="Random seed for reproducibility"),
-    optimizer: str = typer.Option("PrecondScheduleForeachSOAP", help="Optimizer to use"),
+    optimizer: str = typer.Option("SOAP", help="Optimizer to use"),
     weight_decay: float = typer.Option(0.0, help="Weight decay for the optimizer"),
     beta1: float = typer.Option(0.9, help="Beta1 parameter for Adam-like optimizers"),
     beta2: float = typer.Option(0.999, help="Beta2 parameter for Adam-like optimizers"),

@@ -58,7 +58,7 @@ def main(
     steps: int = 10,
     weight_decay: float = 0,
     opt: List[str] = typer.Option(
-        ["ForeachSOAP", "PaLMForeachSOAP", "PrecondScheduleForeachSOAP"], help="Optimizers to use"
+        ["SOAP", "SOAPNAdam", "SOAPAdEMAMix"], help="Optimizers to use"
     ),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,

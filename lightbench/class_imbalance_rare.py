@@ -103,7 +103,7 @@ def main(
     noise_level: float = 0.3,
     steps: int = 2000,
     weight_decay: float = 0.01,
-    opt: str = typer.Option("ForeachSOAP", help="Optimizers to use"),
+    opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 25,
     win_condition_multiplier: float = 1.0,
     config: Optional[str] = None,
