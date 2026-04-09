@@ -5,7 +5,6 @@ from collections import defaultdict
 from pathlib import Path
 from typing import List
 
-import heavyball
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -15,10 +14,14 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from lightbench import resolve_dtype
-from lightbench.utils import get_optim
+from lightbench.utils import get_optim, parse_opt_name
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
+
+
+def _first(batch):
+    return batch[0]
 
 
 class ModularMLP(nn.Module):
@@ -146,7 +149,7 @@ def main(
 
     train_loader = DataLoader(
         train_data,
-        collate_fn=lambda x: x[0],
+        collate_fn=_first,
         batch_size=1,
         shuffle=False,
         pin_memory=True,
@@ -158,7 +161,7 @@ def main(
 
     test_loader = DataLoader(
         test_data,
-        collate_fn=lambda x: x[0],
+        collate_fn=_first,
         batch_size=1,
         shuffle=False,
         pin_memory=True,
@@ -210,9 +213,9 @@ def main(
 
         history.clear()
 
-        # Get optimizer class
-        optimizer_class = getattr(heavyball, o)
-        optimizer = get_optim(optimizer_class, model.parameters(), lr=lr, weight_decay=weight_decay)
+        opt_name, opt_kwargs = parse_opt_name(o)
+        opt_kwargs.pop("_unscale_caution", None)
+        optimizer = get_optim(opt_name, model.parameters(), lr=lr, weight_decay=weight_decay, **opt_kwargs)
 
         loss_hist = torch.empty(steps)
 

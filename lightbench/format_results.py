@@ -1,4 +1,4 @@
-import re
+import json
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,84 +9,86 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
 
+from lightbench.utils import parse_opt_name
 
-def parse_loss(loss_str):
-    loss_str = loss_str.strip()
-    if not loss_str or loss_str.lower() == "nan":
-        return float("nan")
-    if loss_str.lower() == "inf":
-        return float("inf")
-    try:
-        return (
-            float(loss_str)
-            if "e" not in loss_str
-            else float(loss_str.split("e")[0]) * 10 ** float(loss_str.split("e")[1])
-        )
-    except ValueError:
-        return float("nan")
+_OPT_RENAMES = {
+    "CachedPSGDKron": "PSGDKron(cached=True)",
+    "NewtonPSGDLRA": "PSGDLRA(hessian_approx=True, hvp_interval=10000000)",
+}
 
 
-def process_str(x, truthy):
-    if x == "No":
-        return ""
-    if x == "Yes":
-        return f"{truthy}-"
-    return f"{x}-"
+def split_benchmark_name(name):
+    if "-" not in name:
+        return name, None
+    return name.rsplit("-", 1)
+
+
+def normalize_optimizer_name(name):
+    if name.startswith("Foreach") and len(name) > len("Foreach"):
+        name = name[len("Foreach"):]
+    return _OPT_RENAMES.get(name, name)
+
+
+def _opt_flags(opt_str):
+    name, kwargs = parse_opt_name(opt_str)
+    caution = "Unscaled" if kwargs.get("_unscale_caution") else ("Yes" if kwargs.get("caution") else "No")
+    mars = "Yes" if kwargs.get("mars") else "No"
+    return normalize_optimizer_name(name), caution, mars
+
+
+def compose_optimizer(storage, caution, mars, optimizer):
+    parts = []
+    if storage:
+        parts.append(storage)
+    if caution == "Yes":
+        parts.append("cautious")
+    elif caution and caution != "No":
+        parts.append(caution)
+    if mars == "Yes":
+        parts.append("mars")
+    elif mars and mars != "No":
+        parts.append(mars)
+    if optimizer:
+        parts.append(optimizer)
+    return "-".join(parts)
 
 
 def read_benchmark_results(file_path):
-    with open(file_path, "r") as f:
-        content = f.read()
-    details = re.search(r"## Details\n\n(.*?)(?=\n##|\n\Z)", content, re.DOTALL | re.IGNORECASE)
-    if not details:
-        raise ValueError("Details section not found.")
-    table = details.group(1).strip()
-    lines = re.search(r"\|:?-+:?(.*?)\|\n(.*)", table, re.DOTALL).group(2).strip().split("\n")
     data = []
-    for i, line in enumerate(lines):
-        if not line.strip() or line.startswith("|---"):
-            continue
-        parts = [p.strip() for p in line.split("|")[1:-1]]
-        if len(parts) < 8:
-            continue
-        try:
-            caution = process_str(parts[2], "cautious")
-            mars = process_str(parts[3], "mars")
-            optimizer = f"{caution}{mars}{parts[1]}"
-            optimizer = optimizer.replace("Foreach", "").replace("Cached", "").strip()
+    with open(file_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            name, caution, mars = _opt_flags(r["opt"])
+            storage = r.get("dtype", "fp32")
+            loss = r.get("loss")
             data.append({
-                "benchmark": parts[0],
-                "optimizer": optimizer,
-                "success": parts[4] == "✓",
-                "runtime": float(parts[5].replace("s", "")) if parts[5] else float("nan"),
-                "loss": parse_loss(parts[6]) if parts[6] else float("nan"),
-                "attempts": int(parts[7]) if parts[7].isdigit() else 0,
+                "benchmark": f"{r['benchmark']}-{r['difficulty']}",
+                "optimizer": compose_optimizer(storage, caution, mars, name),
+                "success": bool(r.get("success")),
+                "runtime": float(r.get("runtime", 0)),
+                "loss": float(loss) if loss is not None else float("nan"),
+                "attempts": int(r.get("attempts", 0)),
             })
-        except (IndexError, ValueError):
-            continue
     return pd.DataFrame(data)
 
 
 def create_success_matrix(df):
     if df.empty:
         return pd.DataFrame()
-    benchmarks = sorted(df["benchmark"].unique())
-    optimizers = sorted(df["optimizer"].unique())
-    success_matrix = pd.DataFrame(0, index=benchmarks, columns=optimizers, dtype=int)
-    for _, row in df.iterrows():
-        if row["success"] and row["benchmark"] in success_matrix.index and row["optimizer"] in success_matrix.columns:
-            success_matrix.loc[row["benchmark"], row["optimizer"]] = 1
-    base_tasks = sorted(set(b.split("-")[0] for b in benchmarks))
-    success_total_matrix = pd.DataFrame(0, index=base_tasks, columns=optimizers, dtype=int)
-    for benchmark in success_matrix.index:
-        base_task = benchmark.split("-")[0]
-        if base_task in success_total_matrix.index:
-            success_total_matrix.loc[base_task] += success_matrix.loc[benchmark]
-    return success_total_matrix
+    benchmark_rates = df.groupby(["benchmark", "optimizer"], sort=True)["success"].mean().unstack()
+    benchmark_rates["_base_task"] = [split_benchmark_name(name)[0] for name in benchmark_rates.index]
+    success_total_matrix = benchmark_rates.groupby("_base_task", sort=True).mean()
+    return success_total_matrix.sort_index()
 
 
 def normalize_matrix_by_row_max(matrix):
-    max_in_row = matrix.max(axis=1)
+    max_in_row = matrix.max(axis=1, skipna=True).fillna(1)
     max_in_row[max_in_row == 0] = 1
     return matrix.div(max_in_row, axis=0) * 100
 
@@ -94,21 +96,28 @@ def normalize_matrix_by_row_max(matrix):
 def create_visual_matrix_normalized(success_total_matrix):
     if success_total_matrix.empty:
         return None
-    tasks_to_keep = success_total_matrix.sum(axis=1) > 0
-    filtered_matrix = success_total_matrix[tasks_to_keep].copy()
-    if filtered_matrix.empty:
-        return None
-    filtered_matrix[:] = scipy.stats.rankdata(filtered_matrix, axis=1, method="dense")
-    normalized_matrix = normalize_matrix_by_row_max(filtered_matrix)
-    optimizer_means = normalized_matrix.mean(axis=0)
-    task_means = normalized_matrix.mean(axis=1)
-    overall_mean = optimizer_means.mean()
+
+    def rank_nonzero(row):
+        values = row.to_numpy(dtype=float)
+        ranked = np.full_like(values, np.nan, dtype=float)
+        valid = np.isfinite(values)
+        nz = valid & (values > 0)
+        ranked[valid & ~nz] = 0.0
+        if nz.any():
+            ranked[nz] = scipy.stats.rankdata(values[nz], method="dense")
+        return pd.Series(ranked, index=row.index)
+
+    ranked_matrix = success_total_matrix.apply(rank_nonzero, axis=1)
+    normalized_matrix = normalize_matrix_by_row_max(ranked_matrix)
+    optimizer_means = normalized_matrix.mean(axis=0, skipna=True)
+    task_means = normalized_matrix.mean(axis=1, skipna=True)
+    overall_mean = optimizer_means.mean(skipna=True)
     plot_matrix: pd.DataFrame = normalized_matrix.copy()
     plot_matrix.loc["Avg. Optimizer"] = optimizer_means
 
     # weight of 0.5, as "jack of all trades, master of none" is better than "perfect at xor but awful at delay"
-    optimizer_score = (normalized_matrix**0.5).mean(axis=0)
-    optimizer_indices = np.argsort(-optimizer_score.to_numpy())
+    optimizer_score = (normalized_matrix**0.5).mean(axis=0, skipna=True)
+    optimizer_indices = np.argsort(-optimizer_score.fillna(-np.inf).to_numpy())
     plot_matrix = plot_matrix.iloc[:, optimizer_indices]
 
     full_task_means = pd.concat([task_means, pd.Series([overall_mean], index=["Avg. Optimizer"])])
@@ -127,19 +136,21 @@ def create_visual_matrix_normalized(success_total_matrix):
     for i, task in enumerate(plot_tasks):
         for j, optimizer in enumerate(plot_optimizers):
             value = plot_matrix.loc[task, optimizer]
-            original_count = 0
+            original_count = np.nan
             if task != "Avg. Optimizer" and optimizer != "Avg. Task":
                 if task in success_total_matrix.index and optimizer in success_total_matrix.columns:
                     original_count = success_total_matrix.loc[task, optimizer]
             is_summary = task == "Avg. Optimizer" or optimizer == "Avg. Task"
-            face_color = (0.85, 0.85, 0.85, 0.7) if not is_summary and original_count == 0 else mapper.to_rgba(value)
+            if pd.isna(value):
+                face_color = (0.93, 0.93, 0.93, 0.7)
+            elif not is_summary and np.isfinite(original_count) and original_count == 0:
+                face_color = (0.85, 0.85, 0.85, 0.7)
+            else:
+                face_color = mapper.to_rgba(value)
             edge_color = "#666666" if is_summary else "#AAAAAA"
             edge_width = 1.5 if is_summary else 0.5
             rect = Rectangle((j - 0.5, i - 0.5), 1, 1, facecolor=face_color, edgecolor=edge_color, linewidth=edge_width)
             ax.add_patch(rect)
-            # brightness = sum(face_color[:3]) * 0.333
-            # text_color = 'white' if brightness < 0.6 else 'black'
-            # ax.text(j, i, f"{value:.0f}", ha='center', va='center', color=text_color, fontsize=12, fontweight='bold')
 
     ax.axhline(len(plot_tasks) - 1.5, color="#333333", linewidth=2, linestyle="-")
     ax.axvline(len(plot_optimizers) - 1.5, color="#333333", linewidth=2, linestyle="-")
@@ -176,10 +187,10 @@ app = typer.Typer(pretty_exceptions_enable=False)
 
 
 @app.command()
-def main(file: str = typer.Argument("benchmark_results.md")):
+def main(file: str = typer.Argument("benchmark_results.jsonl")):
     df = read_benchmark_results(file)
     if df.empty:
-        print("No data loaded from benchmark file.")
+        print("No data loaded.")
         return
     success_total_matrix = create_success_matrix(df)
     if success_total_matrix.empty:

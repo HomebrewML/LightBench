@@ -10,7 +10,7 @@ HeavyBall.
 
 - 50+ ready-to-run tasks spanning convex, non-convex, multi-objective, and data-imbalanced regimes.
 - Typer-powered CLI with consistent flags for optimizers, dtype, difficulty, and termination criteria.
-- Reproducible harness that streams metrics to stdout and captures Markdown reports and CSV artifacts by default.
+- Reproducible harness that streams metrics to stdout and captures JSONL results by default.
 - Ships with helper utilities and visualizations, from the original HeavyBall benchmark module.
 
 ## Installation
@@ -51,7 +51,7 @@ Every CLI entry supports `--help`. For the global runner:
 lightbench --help
 ```
 
-By default LightBench streams progress to stdout and stores aggregate results in `benchmark_results.md` in the working directory.
+By default LightBench streams progress to stdout and stores results in `benchmark_results.jsonl` in the working directory.
 
 ## Running Individual Benchmarks
 
@@ -90,7 +90,7 @@ lightbench.resolve_dtype("float32")  # normalize dtype specs
 
 ## Outputs & Artifacts
 
-- Markdown reports: `benchmark_results.md`
+- JSONL results: `benchmark_results.jsonl`
 - Optional plots and GIFs from bundled helper scripts
 
 ## Integrating With HeavyBall

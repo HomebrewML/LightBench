@@ -1,5 +1,3 @@
-"""LightBench benchmark suite."""
-
 from collections.abc import Sequence
 from importlib import import_module
 from pathlib import Path
@@ -19,13 +17,14 @@ _EXCLUDED = {
     "__main__",
     "utils",
     "run_all_benchmarks",
-    "cli",
     "format_results",
-    "merge_logs",
+    "dominance_table",
+    "openskill_ranking",
     "generate_animations",
     "create_hiker_analogy_diagram",
     "loss_contour",
     "relu_boundaries",
+    "grokking",
 }
 
 

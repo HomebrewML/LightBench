@@ -10,25 +10,25 @@ from lightbench.utils import disabled_win_condition, trial
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"classes": 16, "items": 8, "add_class_every": 2**6},
-    "easy": {"classes": 16, "items": 8, "add_class_every": 2**8},
-    "medium": {"classes": 16, "items": 8, "add_class_every": 2**10},
-    "hard": {"classes": 16, "items": 8, "add_class_every": 2**12},
-    "extreme": {"classes": 16, "items": 8, "add_class_every": 2**14},
-    "nightmare": {"classes": 16, "items": 8, "add_class_every": 2**16},
+
+configs = {"trivial": {"classes": 2, "items": 8, "add_class_every": 128},  # 256
+    "easy": {"classes": 8, "items": 8, "add_class_every": 64},  # 512
+    "medium": {"classes": 32, "items": 8, "add_class_every": 32},  # 1024
+    "hard": {"classes": 128, "items": 8, "add_class_every": 16},  # 2048
+    "extreme": {"classes": 512, "items": 8, "add_class_every": 8},  # 4096
+    "nightmare": {"classes": 2048, "items": 8, "add_class_every": 4},  # 8192
 }
 
 
 class Model(nn.Module):
-    def __init__(self, classes: int, items: int, add_class_every: int, features: int = 4, hidden: int = 32):
+    def __init__(self, classes: int, items: int, add_class_every: int, features: int = 4):
         super().__init__()
         self.model = nn.Sequential(
             nn.Embedding(classes, features),
             nn.Flatten(),
-            nn.Linear(items * features, hidden),
+            nn.Linear(items * features, classes),
             nn.ReLU(),
-            nn.Linear(hidden, classes + 1),
+            nn.Linear(classes, classes),
         )
         self.step = 0
         self.add_class_every = add_class_every
@@ -40,9 +40,9 @@ class Model(nn.Module):
         data = torch.randint(0, self.classes, (16, self.items), device=self.model[0].weight.device)
         y = self.model(data)
         target = (data.float() @ self.weight.float()).round().long() % self.classes
-        target = torch.where(target >= min(self.step / self.add_class_every + 2, self.classes), 0, target + 1)
-        self.step += 1
-        return torch.nn.functional.cross_entropy(y, target)
+        loss = torch.nn.functional.cross_entropy(y, target, reduction='none')
+        mask = target >= min(self.step / self.add_class_every + 2, self.classes)
+        return (loss * mask).sum() / mask.sum().clamp(min=1)
 
 
 def loss_win_condition(target):
