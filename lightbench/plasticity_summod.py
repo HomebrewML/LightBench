@@ -33,7 +33,7 @@ class Model(nn.Module):
     def forward(self):
         data = torch.randint(0, self.classes, (16, self.items), device=self.model[0].weight.device)
         y = self.model(data)
-        target = data.sum() % self.classes
+        target = data.sum(-1) % self.classes
         loss = torch.nn.functional.cross_entropy(y, target, reduction='none')
         mask = target >= min(self.step / self.add_class_every + 2, self.classes)
         return (loss * mask).sum() / mask.sum().clamp(min=1)
