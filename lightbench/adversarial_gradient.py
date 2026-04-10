@@ -5,19 +5,12 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import param_norm_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"frequency": 1000},
-    "easy": {"frequency": 100},
-    "medium": {"frequency": 10},
-    "hard": {"frequency": 7},
-    "extreme": {"frequency": 4},
-    "nightmare": {"frequency": 2},
-}
+difficulty_spec = {"param": "frequency", "lo": 1000, "hi": 2, "scale": "log", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -44,9 +37,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    frequency = configs.get(config, {}).get("frequency", 10)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    frequency = kwargs.get("frequency", 10)
     model = Model(frequency).cuda()
 
     trial(

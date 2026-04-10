@@ -5,19 +5,12 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import param_norm_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"offset": 32},
-    "easy": {"offset": 16},
-    "medium": {"offset": 8},
-    "hard": {"offset": 4},
-    "extreme": {"offset": 2},
-    "nightmare": {"offset": 1},
-}
+difficulty_spec = {"param": "offset", "lo": 32, "hi": 1, "scale": "log", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -45,9 +38,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    offset = configs.get(config, {}).get("offset", 4)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    offset = kwargs["offset"]
     model = Model(offset).cuda()
 
     trial(

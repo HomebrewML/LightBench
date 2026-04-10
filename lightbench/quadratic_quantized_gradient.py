@@ -5,19 +5,12 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import param_norm_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"bins": 2**6},
-    "easy": {"size": 2**5},
-    "medium": {"size": 2**4},
-    "hard": {"size": 2**3},
-    "extreme": {"size": 2**2},
-    "nightmare": {"size": 2**1},
-}
+difficulty_spec = {"param": "bins", "lo": 64, "hi": 2, "scale": "log", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -48,10 +41,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 10,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    kwargs = configs[config or "trivial"]
-    model = Model(**kwargs).cuda()
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    model = Model(kwargs["bins"]).cuda()
 
     trial(
         model,

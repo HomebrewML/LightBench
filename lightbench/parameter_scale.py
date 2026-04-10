@@ -6,17 +6,11 @@ from heavyball.utils import set_torch
 from torch import nn
 
 from lightbench import resolve_dtype
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"trivial": {"scale": 1},
-           "easy": {"scale": 1e1},
-           "medium": {"scale": 1e3},
-           "hard": {"scale": 1e5},
-           "extreme": {"scale": 1e7},
-           "nightmare": {"scale": 1e9},
-           }
+difficulty_spec = {"param": "scale", "lo": 1, "hi": 1e9, "scale": "log"}
 
 
 class Model(nn.Module):
@@ -41,9 +35,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    scale = configs.get(config, {}).get("scale", 1e3)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    scale = kwargs["scale"]
 
     dtype = resolve_dtype(dtype)
 

@@ -8,19 +8,12 @@ from torch.nn import functional as F
 
 from lightbench import resolve_dtype
 from lightbench.qrnn import QRNNLayer
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"length": 2},
-    "easy": {"length": 4},
-    "medium": {"length": 6},
-    "hard": {"length": 9},
-    "extreme": {"length": 12},
-    "nightmare": {"length": 14},
-}
+difficulty_spec = {"param": "length", "lo": 2, "hi": 14, "scale": "linear", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -35,7 +28,7 @@ class Model(nn.Module):
     def forward(self, inp):
         i0, i1 = inp.chunk(2, 1)
         x = torch.cat([self.embed0(i0), self.embed1(i1)], dim=1)
-        return self.proj(self.qrnn(x)[:, self.length:])
+        return self.proj(self.qrnn(x)[:, self.length :])
 
 
 @app.command()
@@ -49,9 +42,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1,
     trials: int = 10,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    length = configs.get(config, {}).get("length", length)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    length = kwargs["length"]
     dtype = resolve_dtype(dtype)
     torch.manual_seed(0x1239121)
     model = Model(size, length).cuda()
@@ -63,8 +57,17 @@ def main(
         xored = torch.logical_xor(i0, i1)
         return inp.long().squeeze(-1), xored.to(dtype)
 
-    trial(model, data, F.binary_cross_entropy_with_logits, loss_win_condition(win_condition_multiplier * 1e-2),
-          steps, opt, weight_decay, trials=trials, dtype=dtype)
+    trial(
+        model,
+        data,
+        F.binary_cross_entropy_with_logits,
+        loss_win_condition(win_condition_multiplier * 1e-2),
+        steps,
+        opt,
+        weight_decay,
+        trials=trials,
+        dtype=dtype,
+    )
 
 
 if __name__ == "__main__":

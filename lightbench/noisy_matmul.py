@@ -7,19 +7,12 @@ from torch import nn
 from torch.nn import functional as F
 
 from lightbench import resolve_dtype
-from lightbench.utils import param_norm_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"depth": 1},
-    "easy": {"depth": 2},
-    "medium": {"depth": 8},
-    "hard": {"depth": 12},
-    "extreme": {"depth": 16},
-    "nightmare": {"depth": 20},
-}
+difficulty_spec = {"param": "depth", "lo": 1, "hi": 20, "scale": "linear", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -48,9 +41,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    depth = configs.get(config, {}).get("depth", depth)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    depth = kwargs["depth"]
     dtype = resolve_dtype(dtype)
     model = Model(size).cuda()
 

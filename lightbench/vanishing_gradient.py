@@ -15,18 +15,11 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import param_norm_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {
-    "trivial": {"scale": -1},
-    "easy": {"scale": -2},
-    "medium": {"scale": -4},
-    "hard": {"scale": -8},
-    "extreme": {"scale": -12},
-    "nightmare": {"scale": -16},
-}
+difficulty_spec = {"param": "scale", "lo": -1, "hi": -16, "scale": "linear"}
 
 
 class ExplodingGradient(nn.Module):
@@ -50,9 +43,10 @@ def main(
     opt: str = typer.Option("adamw", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 3,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    scale = configs.get(config, {}).get("scale", 2)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    scale = kwargs["scale"]
     model = ExplodingGradient(scale, size)
 
     trial(

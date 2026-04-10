@@ -5,19 +5,12 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import disabled_win_condition, loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, disabled_win_condition, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"classes": 64, "items": 2},  # 4096 unique samples, easy to overfit
-    "easy": {"classes": 64, "items": 4},  # 16e6 samples, will see entire dataset in 1M-step run (batch=16)
-    "medium": {"classes": 64, "items": 6},  # 68e9, 0.025% will be seen
-    "hard": {"classes": 64, "items": 8},  # 281e12,
-    "extreme": {"classes": 64, "items": 10},  # 1e18
-    "nightmare": {"classes": 64, "items": 12},  # 4e21, 1e-13%
-}
+difficulty_spec = {"param": "items", "lo": 2, "hi": 12, "scale": "linear", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -49,10 +42,10 @@ def main(
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    config = configs[config or "trivial"]
-    model = Model(**config)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    model = Model(classes=64, items=kwargs["items"])
 
     win_condition = disabled_win_condition if show_image else loss_win_condition(win_condition_multiplier * 1e-8)
 

@@ -5,18 +5,11 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {
-    "trivial": {"range": 1},
-    "easy": {"range": 2},
-    "medium": {"range": 3},
-    "hard": {"range": 4},
-    "extreme": {"range": 5},
-    "nightmare": {"range": 6},
-}
+difficulty_spec = {"param": "range", "lo": 1, "hi": 6, "scale": "linear", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -38,9 +31,10 @@ def main(
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
     size: int = 512,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    value_range = configs.get(config, {}).get("range", 3)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    value_range = kwargs["range"]
 
     model = Model(size, value_range).cuda().double()
 

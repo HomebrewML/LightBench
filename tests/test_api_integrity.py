@@ -6,6 +6,7 @@ import torch
 
 import lightbench
 from lightbench import _EXCLUDED
+from lightbench.utils import difficulty_to_kwargs
 
 _pkg = Path(lightbench.__file__).resolve().parent
 _utils = (_pkg / "utils.py").read_text()
@@ -13,6 +14,7 @@ _runner = (_pkg / "run_all_benchmarks.py").read_text()
 
 
 # --- resolve_dtype (pure, no heavy deps) ------------------------------------
+
 
 class TestResolveDtype:
     def test_string(self):
@@ -53,21 +55,76 @@ class TestResolveDtype:
 
 # --- Registry ---------------------------------------------------------------
 
+
 def test_available_excludes_helpers():
     assert _EXCLUDED.isdisjoint(lightbench.available())
 
 
 def test_available_has_real_benchmarks():
     names = set(lightbench.available())
-    assert len(names) > 40
-    for expected in ("beale", "rosenbrock", "rastrigin", "MNIST", "CIFAR10_wide",
-                     "powers", "spiral", "SVHN", "Tolstoi_RNN"):
+    assert len(names) > 30
+    for expected in (
+        "powers",
+        "absolute_varying_scale",
+        "gradient_delay",
+        "wide_linear",
+        "xor_digit",
+    ):
         assert expected in names, f"missing benchmark: {expected}"
+    for excluded in (
+        "beale",
+        "rosenbrock",
+        "rastrigin",
+        "spiral",
+        "discontinuous_gradient",
+        "MNIST",
+        "CIFAR100",
+        "SVHN",
+        "Tolstoi_RNN",
+    ):
+        assert excluded not in names
 
 
 def test_available_backed_by_source():
     for name in lightbench.available():
         assert (_pkg / f"{name}.py").exists()
+
+
+# --- Difficulty mapping ------------------------------------------------------
+
+
+def test_difficulty_to_kwargs_single_param():
+    spec = {"param": "size", "lo": 4, "hi": 64, "scale": "log", "dtype": "int"}
+    assert difficulty_to_kwargs(spec, 0.0)["size"] == 4
+    assert difficulty_to_kwargs(spec, 1.0)["size"] == 64
+    assert difficulty_to_kwargs(spec, 0.5)["size"] == 16
+
+
+def test_difficulty_to_kwargs_multi_param():
+    spec = {
+        "params": {
+            "a": {"lo": 1, "hi": 5, "scale": "linear", "dtype": "int"},
+            "b": {"lo": 0.1, "hi": 0.9, "scale": "linear"},
+        }
+    }
+    res = difficulty_to_kwargs(spec, 0.5)
+    assert res["a"] == 3
+    assert abs(res["b"] - 0.5) < 1e-8
+
+
+def test_difficulty_to_kwargs_matches_endpoints():
+    spec = {
+        "params": {
+            "classes": {"lo": 2, "hi": 2048, "scale": "log", "dtype": "int"},
+            "add_class_every": {"lo": 128, "hi": 4, "scale": "log", "dtype": "int"},
+        }
+    }
+    lo = difficulty_to_kwargs(spec, 0.0)
+    hi = difficulty_to_kwargs(spec, 1.0)
+    assert lo["classes"] == 2
+    assert lo["add_class_every"] == 128
+    assert hi["classes"] == 2048
+    assert hi["add_class_every"] == 4
 
 
 def test_runner_derives_from_available():
@@ -79,12 +136,14 @@ def test_runner_derives_from_available():
 
 # --- CLI entrypoint ----------------------------------------------------------
 
+
 def test_cli_exists():
     src = (_pkg / "cli.py").read_text()
     assert "from lightbench.run_all_benchmarks import app" in src
 
 
 # --- Structural invariants (source-level) ------------------------------------
+
 
 def test_no_singleton_list_indexing():
     for path in _pkg.glob("*.py"):
@@ -111,8 +170,8 @@ def test_runner_passes_scalars():
     m = re.search(r"arguments\s*=\s*\{.*?\}", _runner, re.DOTALL)
     assert m
     block = m.group(0)
-    assert '"dtype": dtype' in block
-    assert '"opt": opt' in block
+    assert '"dtype":' in block
+    assert '"opt":' in block
     assert "[dtype]" not in block
     assert "[opt]" not in block
 
@@ -151,6 +210,7 @@ def test_device_parameterized():
 
 
 # --- Packaging ---------------------------------------------------------------
+
 
 def test_runtime_deps():
     toml = _pkg.parent / "pyproject.toml"

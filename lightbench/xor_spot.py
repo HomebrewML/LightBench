@@ -7,19 +7,12 @@ from torch import nn
 
 from lightbench import resolve_dtype
 from lightbench.qrnn import QRNNLayer
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"length": 4},
-    "easy": {"length": 8},
-    "medium": {"length": 16},
-    "hard": {"length": 32},
-    "extreme": {"length": 64},
-    "nightmare": {"length": 96},
-}
+difficulty_spec = {"param": "length", "lo": 4, "hi": 96, "scale": "linear", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -46,9 +39,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 10,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    length = configs.get(config, {}).get("length", length)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    length = kwargs["length"]
     dtype = resolve_dtype(dtype)
     model = Model(size).cuda()
 
@@ -61,9 +55,17 @@ def main(
         target = (inp * zeros).sum(1) % 2
         return torch.stack((inp, zeros + 2), 0).to(dtype), target.to(dtype)
 
-    trial(model, data, torch.nn.functional.binary_cross_entropy_with_logits,
-          loss_win_condition(win_condition_multiplier * 1e-2),
-          steps, opt, weight_decay, trials=trials, dtype=dtype)
+    trial(
+        model,
+        data,
+        torch.nn.functional.binary_cross_entropy_with_logits,
+        loss_win_condition(win_condition_multiplier * 1e-2),
+        steps,
+        opt,
+        weight_decay,
+        trials=trials,
+        dtype=dtype,
+    )
 
 
 if __name__ == "__main__":

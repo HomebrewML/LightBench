@@ -6,18 +6,11 @@ from heavyball.utils import set_torch
 from torch import nn
 
 from lightbench import resolve_dtype
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {
-    "trivial": {"weight": 0.004},
-    "easy": {"weight": 0.02},
-    "medium": {"weight": 0.1},
-    "hard": {"weight": 0.5},
-    "extreme": {"weight": 1},
-    "nightmare": {"weight": 2},
-}
+difficulty_spec = {"param": "weight", "lo": 0.004, "hi": 2, "scale": "log"}
 
 
 class Model(nn.Module):
@@ -43,9 +36,10 @@ def main(
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
     weight: float = 0.1,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    weight = configs.get(config, {}).get("weight", weight)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    weight = kwargs["weight"]
     dtype = resolve_dtype(dtype)
     model = Model(weight).cuda().double()
 

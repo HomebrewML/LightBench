@@ -5,18 +5,11 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {
-    "trivial": {"sparsity": 0.5},
-    "easy": {"sparsity": 2**-3},
-    "medium": {"sparsity": 2**-6},
-    "hard": {"sparsity": 2**-8},
-    "extreme": {"sparsity": 2**-11},
-    "nightmare": {"sparsity": 2**-14},
-}
+difficulty_spec = {"param": "sparsity", "lo": 0.5, "hi": 2**-14, "scale": "log"}
 
 
 class Model(nn.Module):
@@ -45,9 +38,10 @@ def main(
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
     sparsity: float = 2**-6,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    sparsity = configs.get(config, {}).get("sparsity", sparsity)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    sparsity = kwargs["sparsity"]
     model = Model(sparsity=sparsity).cuda().double()
 
     trial(

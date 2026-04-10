@@ -16,18 +16,12 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {
-    "trivial": {"frequency": 1000},
-    "easy": {"frequency": 100},
-    "medium": {"frequency": 20},
-    "hard": {"frequency": 10},
-    "extreme": {"frequency": 6},
-    "nightmare": {"frequency": 4},
-}
+
+difficulty_spec = {"param": "frequency", "lo": 1_000, "hi": 4, "scale": "log", "dtype": "int"}
 
 
 class ShiftingSphere(nn.Module):
@@ -53,10 +47,11 @@ def main(
     opt: str = typer.Option("adamw", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 3,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
     """Run dynamic landscape benchmark with specified parameters."""
-    frequency = configs.get(config, {}).get("frequency", 0.1)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    frequency = kwargs.get("frequency", 0.1)
 
     model = ShiftingSphere(dim, frequency)
 

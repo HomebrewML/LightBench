@@ -7,18 +7,27 @@ import os
 import random
 import sys
 import traceback
+from dataclasses import dataclass
 from queue import Empty
 
+import numpy as np
 import typer
 
 from lightbench.utils import SkipConfig, parse_opt_name, _HPARAM_NAMES
 
 app = typer.Typer()
 
-_DIFFICULTIES = ("trivial", "easy", "medium", "hard", "extreme", "nightmare")
 _DTYPE_PREFIX = {"fp32": "fp32-", "bf16+ecc": "bf16+ecc-", "bf16": "bf16-", "fp16+ecc": "fp16+ecc-", "fp16": "fp16-"}
 _DTYPE_PREREQ = {"bf16+ecc": "fp32", "bf16": "bf16+ecc", "fp16+ecc": "fp32", "fp16": "fp16+ecc"}
 _WATCHDOG_SLACK = 30
+_GATE_MIN_PASS = 0.01
+_GATE_MASS = 0.05
+_POSTERIOR_Q = 0.05
+_POSTERIOR_EPS = 1e-3
+_OPT_RENAMES = {
+    "CachedPSGDKron": "PSGDKron(cached=True)",
+    "NewtonPSGDLRA": "PSGDLRA(hessian_approx=True, hvp_interval=10000000)",
+}
 
 
 def _normalize_dtype(value):
@@ -40,13 +49,15 @@ def _validate_dtype_deps(dtypes):
 
 
 def _task_key(name, difficulty, opt, dtype):
-    return name, difficulty, opt, dtype
+    return name, float(difficulty), opt, dtype
 
 
 def _result_key(result):
     try:
-        return _task_key(str(result["benchmark"]), str(result["difficulty"]),
-                         str(result["opt"]), _normalize_dtype(result["dtype"]))
+        difficulty = float(result["difficulty"])
+        if not math.isfinite(difficulty):
+            return None
+        return _task_key(str(result["benchmark"]), difficulty, str(result["opt"]), _normalize_dtype(result["dtype"]))
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -67,13 +78,39 @@ def _pass_state(result):
     return False if not error or error.startswith(("Skipped", "Gated")) else None
 
 
-def _fail(benchmark, difficulty, opt, dtype, steps, trials, timeout, error, *, timed_out=False):
+def _fail(
+    benchmark,
+    difficulty,
+    opt,
+    dtype,
+    steps,
+    trials,
+    timeout,
+    error,
+    *,
+    timed_out=False,
+    search_step=None,
+    search_lo=None,
+    search_hi=None,
+):
     return {
-        "benchmark": benchmark, "difficulty": difficulty,
-        "opt": opt, "dtype": dtype, "success": False, "runtime": 0.0, "attempts": 0,
-        "timed_out": timed_out, "loss": None, "error": error,
-        "steps": int(steps), "trials": int(trials), "timeout": int(timeout),
+        "benchmark": benchmark,
+        "difficulty": float(difficulty),
+        "opt": opt,
+        "dtype": dtype,
+        "success": False,
+        "runtime": 0.0,
+        "attempts": 0,
+        "timed_out": timed_out,
+        "loss": None,
+        "error": error,
+        "steps": int(steps),
+        "trials": int(trials),
+        "timeout": int(timeout),
         "winning": None,
+        "search_step": search_step,
+        "search_lo": search_lo,
+        "search_hi": search_hi,
     }
 
 
@@ -87,6 +124,314 @@ def _winning_to_hint(winning):
         return None
 
 
+def _best_hint(hints, *, below):
+    if not hints:
+        return None
+    candidates = [d for d in hints if d <= below]
+    if not candidates:
+        return None
+    return _winning_to_hint(hints[max(candidates)])
+
+
+@dataclass
+class _SearchState:
+    grid: np.ndarray
+    weights: np.ndarray
+    seen: set[int]
+    hints: dict[float, dict]
+    evals_done: int
+    attempts_done: int
+    min_evals: int
+    max_attempts: int
+    precision: float
+    slope: float
+
+    @classmethod
+    def from_results(
+        cls,
+        *,
+        precision,
+        min_evals,
+        max_evals,
+        opt,
+        bench,
+        dtype,
+        irt_prior,
+        parent_results=None,
+        prior_results=None,
+        attempts_done=0,
+    ):
+        grid = _difficulty_grid(precision)
+        prior = _irt_prior_for(irt_prior, _opt_label_for_irt(opt), bench, dtype, precision)
+        weights = _posterior_weights(grid, prior)
+        hints = {}
+        seen = set()
+        evals_done = 0
+        attempts_done = int(attempts_done)
+        slope = prior[1] if prior is not None else 8.0
+
+        if parent_results:
+            for d, passed, winning in parent_results:
+                if passed and winning:
+                    hints[d] = winning
+
+        if prior_results:
+            for d, passed, winning in prior_results:
+                if passed is None:
+                    continue
+                evals_done += 1
+                seen.add(_grid_index(grid, d))
+                if passed and winning:
+                    hints[d] = winning
+                weights = _posterior_update(grid, weights, d, passed, slope)
+
+        attempts_done = max(attempts_done, evals_done)
+        return cls(
+            grid=grid,
+            weights=weights,
+            seen=seen,
+            hints=hints,
+            evals_done=evals_done,
+            attempts_done=attempts_done,
+            min_evals=min_evals,
+            max_attempts=max_evals,
+            precision=precision,
+            slope=slope,
+        )
+
+    def interval(self):
+        return _posterior_interval(self.grid, self.weights, _POSTERIOR_Q)
+
+    def done(self):
+        if self.attempts_done >= self.max_attempts:
+            return True
+        if self.evals_done < self.min_evals:
+            return False
+        lo, hi = self.interval()
+        return (hi - lo) < self.precision
+
+    def propose(self):
+        return _posterior_median(self.grid, self.weights, self.seen)
+
+    def update(self, difficulty, state, winning, error):
+        if error.startswith(("Skipped", "Gated")):
+            state = None
+        self.seen.add(_grid_index(self.grid, difficulty))
+        if state is not None:
+            self.weights = _posterior_update(self.grid, self.weights, difficulty, state, self.slope)
+            if state and winning:
+                self.hints[difficulty] = winning
+            self.evals_done += 1
+        self.attempts_done += 1
+
+    def mass_above(self, threshold):
+        return float(self.weights[self.grid >= threshold].sum())
+
+
+def _difficulty_grid(precision):
+    n = max(2, int(math.ceil(1.0 / precision)) + 1)
+    return np.linspace(0.0, 1.0, n)
+
+
+def _posterior_weights(grid, prior):
+    if prior is None:
+        weights = np.ones_like(grid)
+        return weights / weights.sum()
+    dstar, slope, theta_se, precision = prior
+    scale = 1.0 / max(slope, 1e-3)
+    if np.isfinite(theta_se):
+        scale = math.hypot(scale, theta_se / max(slope, 1e-3))
+    scale = max(scale, precision * 2)
+    scale = min(scale, 0.5)
+    weights = np.exp(-0.5 * ((grid - dstar) / scale) ** 2)
+    weights += 1e-12
+    return weights / weights.sum()
+
+
+def _posterior_update(grid, weights, difficulty, passed, slope):
+    logits = slope * (grid - difficulty)
+    probs = np.where(
+        logits >= 0,
+        1.0 / (1.0 + np.exp(-logits)),
+        np.exp(logits) / (1.0 + np.exp(logits)),
+    )
+    likelihood = probs if passed else (1.0 - probs)
+    likelihood = likelihood * (1.0 - _POSTERIOR_EPS) + _POSTERIOR_EPS
+    weights = weights * likelihood
+    weights += 1e-12
+    return weights / weights.sum()
+
+
+def _posterior_interval(grid, weights, q):
+    cdf = np.cumsum(weights)
+    lo_idx = np.searchsorted(cdf, q, side="left")
+    hi_idx = np.searchsorted(cdf, 1 - q, side="left")
+    lo_idx = min(max(lo_idx, 0), len(grid) - 1)
+    hi_idx = min(max(hi_idx, 0), len(grid) - 1)
+    return float(grid[lo_idx]), float(grid[hi_idx])
+
+
+def _posterior_median(grid, weights, seen):
+    base = weights
+    weights = weights.copy()
+    if seen:
+        seen_idx = np.array(sorted(seen), dtype=int)
+        seen_idx = seen_idx[(seen_idx >= 0) & (seen_idx < len(weights))]
+        if seen_idx.size:
+            weights[seen_idx] = 0.0
+            total = weights.sum()
+            if total > 0:
+                weights /= total
+            else:
+                weights = base
+    cdf = np.cumsum(weights)
+    idx = np.searchsorted(cdf, 0.5, side="left")
+    idx = min(max(idx, 0), len(grid) - 1)
+    return float(grid[idx])
+
+
+def _posterior_entropy(weights):
+    w = weights[weights > 0]
+    if w.size == 0:
+        return 0.0
+    return float(-np.sum(w * np.log(w)))
+
+
+def _grid_index(grid, difficulty):
+    if len(grid) <= 1:
+        return 0
+    idx = int(round(float(difficulty) * (len(grid) - 1)))
+    return min(max(idx, 0), len(grid) - 1)
+
+
+def _payload_priority(
+    *,
+    opt,
+    bench,
+    dtypes,
+    prior_results,
+    attempts_by_dtype,
+    gated_by_dtype,
+    irt_prior,
+    precision,
+    min_evals,
+    max_evals,
+):
+    score = 0.0
+    active = 0
+    for dt in dtypes:
+        if gated_by_dtype.get(dt):
+            continue
+        state = _SearchState.from_results(
+            precision=precision,
+            min_evals=min_evals,
+            max_evals=max_evals,
+            opt=opt,
+            bench=bench,
+            dtype=dt,
+            irt_prior=irt_prior,
+            prior_results=prior_results.get(dt, []),
+            attempts_done=attempts_by_dtype.get(dt, 0),
+        )
+        if state.done():
+            continue
+        active += 1
+        score += _posterior_entropy(state.weights)
+    if active == 0:
+        return 0.0
+    return score / active
+
+
+@dataclass(frozen=True)
+class _IrtPrior:
+    opt_index: dict[str, int]
+    bench_index: dict[str, int]
+    dtype_index: dict[str, int]
+    theta: np.ndarray
+    beta: np.ndarray
+    gamma: np.ndarray
+    delta: np.ndarray
+    theta_se: np.ndarray
+    bench_center: np.ndarray
+    bench_scale: np.ndarray
+
+
+def _opt_label_for_irt(opt_name: str) -> str:
+    try:
+        name, kwargs = parse_opt_name(opt_name)
+    except Exception:
+        return opt_name
+    if name.startswith("Foreach") and name != "Foreach":
+        name = name[len("Foreach") :]
+    name = _OPT_RENAMES.get(name, name)
+    caution = "Unscaled" if kwargs.get("_unscale_caution") else ("Yes" if kwargs.get("caution") else "No")
+    mars = "Yes" if kwargs.get("mars") else "No"
+    parts = []
+    if caution == "Yes":
+        parts.append("cautious")
+    elif caution and caution != "No":
+        parts.append(caution)
+    if mars == "Yes":
+        parts.append("mars")
+    elif mars and mars != "No":
+        parts.append(mars)
+    parts.append(name)
+    return "-".join(parts)
+
+
+def _build_irt_prior(path, *, max_iter, min_rows, steps=None, trials=None, timeout=None):
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        from lightbench.irt_ranking import fit, load_results
+    except Exception:
+        return None
+    data = load_results(path, steps=steps, trials=trials, timeout=timeout)
+    if data is None or len(data.outcome) < min_rows:
+        return None
+    model = fit(data, max_iter=max_iter)
+    unpacked = model.unpacked()
+    if unpacked is None:
+        return None
+    theta, beta, gamma, delta, _log_gamma = unpacked
+    return _IrtPrior(
+        opt_index={name: i for i, name in enumerate(model.opt_names)},
+        bench_index={name: i for i, name in enumerate(model.bench_names)},
+        dtype_index={name: i for i, name in enumerate(model.dtype_names)},
+        theta=theta,
+        beta=beta,
+        gamma=gamma,
+        delta=delta,
+        theta_se=model.theta_se(),
+        bench_center=model.bench_center,
+        bench_scale=model.bench_scale,
+    )
+
+
+def _irt_prior_for(prior, opt_label, bench, dtype, precision):
+    if prior is None:
+        return None
+    opt_idx = prior.opt_index.get(opt_label)
+    bench_idx = prior.bench_index.get(bench)
+    dtype_idx = prior.dtype_index.get(dtype)
+    if bench_idx is None or opt_idx is None or dtype_idx is None:
+        return None
+    theta = prior.theta[opt_idx]
+    beta = prior.beta[bench_idx]
+    gamma = prior.gamma[bench_idx]
+    delta = prior.delta[dtype_idx]
+    bench_center = prior.bench_center[bench_idx]
+    bench_scale = prior.bench_scale[bench_idx]
+    theta_se = prior.theta_se[opt_idx]
+    if not np.isfinite(gamma) or gamma <= 0:
+        gamma = 1.0
+    bench_scale = max(bench_scale, 1e-6)
+    dstar = bench_center + bench_scale * (theta - delta - beta) / gamma
+    dstar = float(np.clip(dstar, 0.0, 1.0))
+    slope = float(max(gamma / bench_scale, 1e-3))
+    return dstar, slope, theta_se, precision
+
+
 # --- Subprocess ---
 
 
@@ -95,20 +440,26 @@ def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
     import torch
     from lightbench import utils
 
+    diff = float(diff)
     torch.cuda.set_device(gpu)
     utils._BENCHMARK_TIMEOUT_SECONDS = timeout
     utils._trial_hint = hint
 
     mod = lightbench.load(name)
-    args = {
-        "steps": steps, "weight_decay": 0, "opt": f"{_DTYPE_PREFIX[dtype]}{opt}",
-        "trials": trials, "win_condition_multiplier": 1.0, "config": diff, "dtype": "float32",
+    arguments = {
+        "steps": steps,
+        "weight_decay": 0,
+        "opt": f"{_DTYPE_PREFIX[dtype]}{opt}",
+        "trials": trials,
+        "win_condition_multiplier": 1.0,
+        "config": diff,
+        "dtype": "float32",
     }
     sig = inspect.signature(mod.main)
     if not any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
-        args = {k: v for k, v in args.items() if k in sig.parameters}
+        arguments = {k: v for k, v in arguments.items() if k in sig.parameters}
 
-    mod.main(**args)
+    mod.main(**arguments)
 
     r = utils._trial_result
     loss = r["best_loss"]
@@ -116,19 +467,26 @@ def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
     if winning:
         winning = {k: (float(v) if math.isfinite(v) else None) for k, v in winning.items()}
     return {
-        "benchmark": name, "difficulty": diff,
-        "opt": opt, "dtype": dtype,
-        "success": bool(r["did_win"]), "runtime": float(r["elapsed"]),
+        "benchmark": name,
+        "difficulty": diff,
+        "opt": opt,
+        "dtype": dtype,
+        "success": bool(r["did_win"]),
+        "runtime": float(r["elapsed"]),
         "loss": float(loss) if loss is not None and math.isfinite(loss) else None,
         "attempts": int(r["attempts"]),
-        "timed_out": bool(r["timed_out"]), "error": "",
-        "steps": int(steps), "trials": int(trials), "timeout": int(timeout),
+        "timed_out": bool(r["timed_out"]),
+        "error": "",
+        "steps": int(steps),
+        "trials": int(trials),
+        "timeout": int(timeout),
         "winning": winning,
     }
 
 
 def _subprocess_loop(task_q, result_q, gpu):
     import torch
+
     torch.cuda.set_device(gpu)
     sys.stdout = open(os.devnull, "w")
 
@@ -201,8 +559,79 @@ class _SubprocessRunner:
 # --- Worker ---
 
 
-def worker(task_queue, result_queue, worker_index, timeout):
+def adaptive_search(
+    runner,
+    name,
+    opt,
+    dtype,
+    steps,
+    trials,
+    timeout,
+    min_evals,
+    max_evals,
+    precision,
+    parent_results=None,
+    prior_results=None,
+    irt_prior=None,
+    attempts_done=0,
+):
+    results = []
+    state = _SearchState.from_results(
+        precision=precision,
+        min_evals=min_evals,
+        max_evals=max_evals,
+        opt=opt,
+        bench=name,
+        dtype=dtype,
+        irt_prior=irt_prior,
+        parent_results=parent_results,
+        prior_results=prior_results,
+        attempts_done=attempts_done,
+    )
+
+    while not state.done():
+        lo, hi = state.interval()
+        mid = state.propose()
+        hint = _best_hint(state.hints, below=mid)
+
+        print(f"{'[hint] ' if hint else ''}Start: {name}-{mid:.4f} | {opt} | {dtype}", flush=True)
+        task_kwargs = dict(
+            name=name,
+            opt=opt,
+            dtype=dtype,
+            diff=mid,
+            steps=steps,
+            trials=trials,
+            timeout=timeout,
+            hint=hint,
+        )
+        kind, result, err = runner.run(timeout, **task_kwargs)
+
+        if kind == "skip":
+            result = _fail(name, mid, opt, dtype, steps, trials, timeout, f"Skipped: {err}")
+        elif kind == "timeout":
+            result = _fail(name, mid, opt, dtype, steps, trials, timeout, err, timed_out=True)
+        elif kind != "ok":
+            result = _fail(name, mid, opt, dtype, steps, trials, timeout, err or "Unknown error")
+
+        result["search_step"] = state.attempts_done
+        result["search_lo"] = lo
+        result["search_hi"] = hi
+        results.append(result)
+
+        state.update(
+            mid,
+            _pass_state(result),
+            result.get("winning"),
+            str(result.get("error") or "").strip(),
+        )
+
+    return results
+
+
+def worker(task_queue, result_queue, worker_index, timeout, min_evals, max_evals, precision, irt_prior):
     import torch
+
     gpu = worker_index % torch.cuda.device_count()
     runner = _SubprocessRunner(gpu)
 
@@ -212,77 +641,91 @@ def worker(task_queue, result_queue, worker_index, timeout):
             if payload is None:
                 return
 
-            name, opt, steps, trials, difficulties, dtypes, pending_pairs, prior_pass, prior_winning = payload
-            pending = set(pending_pairs)
-            passed = dict(prior_pass)
-            chain_alive = {dt: True for dt in dtypes}
-            chain_reason = {}
-            configs = dict(prior_winning)
+            name, opt, steps, trials, dtypes, prior_results, prior_attempts, gated_by_dtype = payload
+            accumulated = {dt: list(results) for dt, results in prior_results.items()}
+            attempts = dict(prior_attempts)
 
-            max_diff = len(difficulties)
+            for dt in dtypes:
+                if gated_by_dtype.get(dt):
+                    continue
+                parent = _DTYPE_PREREQ.get(dt)
+                prior = accumulated.get(dt, [])
+                if parent and parent in accumulated:
+                    parent_state = _SearchState.from_results(
+                        precision=precision,
+                        min_evals=min_evals,
+                        max_evals=max_evals,
+                        opt=opt,
+                        bench=name,
+                        dtype=parent,
+                        irt_prior=None,
+                        prior_results=accumulated[parent],
+                        attempts_done=attempts.get(parent, 0),
+                    )
+                    if parent_state.evals_done >= min_evals:
+                        if parent_state.mass_above(_GATE_MIN_PASS) < _GATE_MASS:
+                            result_queue.put(
+                                _fail(
+                                    name,
+                                    0.0,
+                                    opt,
+                                    dt,
+                                    steps,
+                                    trials,
+                                    timeout,
+                                    f"Gated: {parent} failed",
+                                    search_step=0,
+                                    search_lo=0.0,
+                                    search_hi=1.0,
+                                )
+                            )
+                            continue
 
-            for diff_idx, difficulty in enumerate(difficulties):
-                if diff_idx >= max_diff:
-                    for dt in dtypes:
-                        pair = (dt, difficulty)
-                        passed[pair] = False
-                        if pair in pending:
-                            result_queue.put(_fail(name, difficulty, opt, dt, steps, trials, timeout,
-                                                   f"Skipped: {name} unsupported at {difficulty}"))
+                search_state = _SearchState.from_results(
+                    precision=precision,
+                    min_evals=min_evals,
+                    max_evals=max_evals,
+                    opt=opt,
+                    bench=name,
+                    dtype=dt,
+                    irt_prior=irt_prior,
+                    parent_results=accumulated.get(parent, []) if parent else None,
+                    prior_results=prior,
+                    attempts_done=attempts.get(dt, 0),
+                )
+                if search_state.done():
                     continue
 
-                for dt in dtypes:
-                    pair = (dt, difficulty)
-
-                    if not chain_alive[dt]:
-                        passed[pair] = False
-                        if pair in pending:
-                            result_queue.put(_fail(name, difficulty, opt, dt, steps, trials, timeout,
-                                                   chain_reason.get(dt, f"Gated: {dt} chain")))
+                search_results = adaptive_search(
+                    runner,
+                    name,
+                    opt,
+                    dt,
+                    steps,
+                    trials,
+                    timeout,
+                    min_evals,
+                    max_evals,
+                    precision,
+                    parent_results=accumulated.get(parent, []) if parent else None,
+                    prior_results=prior,
+                    irt_prior=irt_prior,
+                    attempts_done=attempts.get(dt, 0),
+                )
+                new_results = []
+                for r in search_results:
+                    error = str(r.get("error") or "").strip()
+                    if error.startswith(("Skipped", "Gated")):
                         continue
-
-                    parent = _DTYPE_PREREQ.get(dt)
-                    if parent and passed.get((parent, difficulty)) is False:
-                        chain_alive[dt] = False
-                        chain_reason[dt] = f"Gated: {parent}-{difficulty} failed"
-                        passed[pair] = False
-                        if pair in pending:
-                            result_queue.put(_fail(name, difficulty, opt, dt, steps, trials, timeout, chain_reason[dt]))
+                    state = _pass_state(r)
+                    if state is None:
                         continue
+                    new_results.append((r["difficulty"], state, r.get("winning")))
+                if prior or new_results:
+                    accumulated[dt] = prior + new_results
 
-                    if pair not in pending:
-                        if passed.get(pair) is False:
-                            chain_alive[dt] = False
-                            chain_reason[dt] = f"Gated: {dt}-{difficulty} failed"
-                        continue
-
-                    hint = _winning_to_hint(configs.get((parent, difficulty))) if parent else None
-                    if hint is None and diff_idx > 0:
-                        hint = _winning_to_hint(configs.get((dt, difficulties[diff_idx - 1])))
-
-                    print(f"{'[hint] ' if hint else ''}Start: {name}-{difficulty} | {opt} | {dt}", flush=True)
-                    task_kwargs = dict(
-                        name=name, opt=opt, dtype=dt, diff=difficulty,
-                        steps=steps, trials=trials, timeout=timeout, hint=hint,
-                    )
-                    kind, result, err = runner.run(timeout, **task_kwargs)
-
-                    if kind == "skip":
-                        result = _fail(name, difficulty, opt, dt, steps, trials, timeout, f"Skipped: {err}")
-                        max_diff = min(max_diff, diff_idx)
-                    elif kind == "timeout":
-                        result = _fail(name, difficulty, opt, dt, steps, trials, timeout, err, timed_out=True)
-                    elif kind != "ok":
-                        result = _fail(name, difficulty, opt, dt, steps, trials, timeout, err or "Unknown error")
-
-                    result_queue.put(result)
-                    state = _pass_state(result)
-                    passed[pair] = state
-                    if state is True and result.get("winning"):
-                        configs[pair] = result["winning"]
-                    if state is False:
-                        chain_alive[dt] = False
-                        chain_reason[dt] = str(result.get("error") or f"Gated: {dt}-{difficulty} failed")
+                for r in search_results:
+                    result_queue.put(r)
     except Exception:
         traceback.print_exc()
     finally:
@@ -326,7 +769,15 @@ def main(
     caution: bool = False,
     mars: bool = False,
     unscaled_caution: bool = False,
-    difficulties: list[str] = typer.Option([], help="Subset of difficulties"),
+    min_evals: int = typer.Option(4, help="Minimum adaptive evaluations"),
+    max_evals: int = typer.Option(8, help="Maximum adaptive evaluations"),
+    precision: float = typer.Option(1 / 128, help="Stop when uncertainty is below this"),
+    irt_prior: str | None = typer.Option(None, help="Results log to seed IRT priors"),
+    irt_max_iter: int = typer.Option(200, help="Max IRT optimizer iterations"),
+    irt_min_rows: int = typer.Option(200, help="Minimum rows to fit IRT priors"),
+    no_irt: bool = typer.Option(False, help="Disable IRT priors"),
+    sampling: str = typer.Option("full", help="Sampling policy: full, entropy, random"),
+    max_payloads: int | None = typer.Option(None, help="Limit number of payloads"),
     include_benchmark: list[str] = typer.Option([], help="Only these benchmarks"),
     exclude_benchmark: list[str] = typer.Option([], help="Skip these benchmarks"),
     progress_log: str = "benchmark_results.jsonl",
@@ -338,6 +789,16 @@ def main(
 
     if parallelism < 1:
         raise ValueError("--parallelism must be >= 1")
+    if min_evals < 1:
+        raise ValueError("--min-evals must be >= 1")
+    if max_evals < min_evals:
+        raise ValueError("--max-evals must be >= --min-evals")
+    if precision <= 0:
+        raise ValueError("--precision must be > 0")
+    if sampling not in {"full", "entropy", "random"}:
+        raise ValueError("--sampling must be one of: full, entropy, random")
+    if max_payloads is not None and max_payloads < 1:
+        raise ValueError("--max-payloads must be >= 1")
 
     all_benchmarks = available()
     bench_set = set(all_benchmarks)
@@ -346,19 +807,16 @@ def main(
         if unknown:
             raise ValueError(f"Unknown benchmarks in --{label}-benchmark: {unknown}")
 
-    benchmarks = [b for b in all_benchmarks
-                  if (not include_benchmark or b in set(include_benchmark)) and b not in set(exclude_benchmark)]
+    benchmarks = [
+        b
+        for b in all_benchmarks
+        if (not include_benchmark or b in set(include_benchmark)) and b not in set(exclude_benchmark)
+    ]
     if not benchmarks:
         raise ValueError("No benchmarks found")
 
     dtypes = list(dict.fromkeys(_normalize_dtype(v) for v in dtype))
     _validate_dtype_deps(dtypes)
-
-    diffs = list(dict.fromkeys(difficulties or _DIFFICULTIES))
-    unknown_diffs = sorted(set(diffs) - set(_DIFFICULTIES))
-    if unknown_diffs:
-        raise ValueError(f"Unknown difficulties: {unknown_diffs}")
-    ordered_diffs = tuple(d for d in _DIFFICULTIES if d in diffs)
 
     if mars:
         opt = [f"mars-{o}" for o in opt]
@@ -378,36 +836,111 @@ def main(
     if log_dir:
         os.makedirs(log_dir, exist_ok=True)
 
+    prior_log = irt_prior or (progress_log if os.path.exists(progress_log) else None)
+    irt_model = (
+        None
+        if no_irt
+        else _build_irt_prior(
+            prior_log,
+            max_iter=irt_max_iter,
+            min_rows=irt_min_rows,
+            steps=steps,
+            trials=trials,
+            timeout=timeout,
+        )
+    )
+
     results_by_key = _load_resume(progress_log, steps=steps, trials=trials, timeout=timeout) if resume else {}
     if not resume:
         open(progress_log, "w").close()
 
-    scope = (set(benchmarks), set(ordered_diffs), set(opt), set(dtypes))
-    results_by_key = {k: v for k, v in results_by_key.items()
-                      if k[0] in scope[0] and k[1] in scope[1] and k[2] in scope[2] and k[3] in scope[3]}
+    scope = (set(benchmarks), set(opt), set(dtypes))
+    results_by_key = {
+        k: v for k, v in results_by_key.items() if k[0] in scope[0] and k[2] in scope[1] and k[3] in scope[2]
+    }
+
+    grouped = {}
+    for (bench, diff, opt_name, dtype_name), row in results_by_key.items():
+        grouped.setdefault((bench, opt_name), {}).setdefault(dtype_name, []).append(row)
 
     ordered_dtypes = _ordered_dtypes(dtypes)
     payloads = []
-    queued = 0
     for o, name in itertools.product(opt, benchmarks):
-        pending_pairs, prior_pass, prior_winning = [], {}, {}
-        for dt, diff in itertools.product(ordered_dtypes, ordered_diffs):
-            key = _task_key(name, diff, o, dt)
-            prior = results_by_key.get(key)
-            prior_pass[(dt, diff)] = None if prior is None else _pass_state(prior)
-            if prior is None:
-                pending_pairs.append((dt, diff))
-                queued += 1
-            elif prior.get("winning"):
-                prior_winning[(dt, diff)] = prior["winning"]
-        if pending_pairs:
-            payloads.append((name, o, steps, trials, ordered_diffs, ordered_dtypes,
-                             tuple(pending_pairs), prior_pass, prior_winning))
+        prior_results = {}
+        attempts_by_dtype = {}
+        gated_by_dtype = {}
+        for dt in ordered_dtypes:
+            rows = grouped.get((name, o), {}).get(dt, [])
+            attempts_by_dtype[dt] = len(rows)
+            gated_by_dtype[dt] = any(str(row.get("error") or "").strip().startswith("Gated") for row in rows)
+            tuples = []
+            for row in rows:
+                error = str(row.get("error") or "").strip()
+                if error.startswith(("Skipped", "Gated")):
+                    continue
+                state = _pass_state(row)
+                if state is None:
+                    continue
+                tuples.append((float(row["difficulty"]), state, row.get("winning")))
+            if tuples:
+                prior_results[dt] = tuples
 
-    total = len(benchmarks) * len(opt) * len(ordered_dtypes) * len(ordered_diffs)
+        needs_run = False
+        for dt in ordered_dtypes:
+            if gated_by_dtype.get(dt):
+                continue
+            state = _SearchState.from_results(
+                precision=precision,
+                min_evals=min_evals,
+                max_evals=max_evals,
+                opt=o,
+                bench=name,
+                dtype=dt,
+                irt_prior=irt_model,
+                prior_results=prior_results.get(dt, []),
+                attempts_done=attempts_by_dtype.get(dt, 0),
+            )
+            if not state.done():
+                needs_run = True
+                break
+        if needs_run:
+            payloads.append((
+                name,
+                o,
+                steps,
+                trials,
+                ordered_dtypes,
+                prior_results,
+                attempts_by_dtype,
+                gated_by_dtype,
+            ))
+
+    if sampling == "entropy":
+        payloads.sort(
+            key=lambda p: _payload_priority(
+                opt=p[1],
+                bench=p[0],
+                dtypes=p[4],
+                prior_results=p[5],
+                attempts_by_dtype=p[6],
+                gated_by_dtype=p[7],
+                irt_prior=irt_model,
+                precision=precision,
+                min_evals=min_evals,
+                max_evals=max_evals,
+            ),
+            reverse=True,
+        )
+    elif sampling == "random":
+        random.shuffle(payloads)
+
+    if max_payloads is not None:
+        payloads = payloads[:max_payloads]
+
+    total = len(payloads) * max_evals * len(ordered_dtypes)
     if not total:
         raise ValueError("No tasks to run")
-    if not queued:
+    if not payloads:
         print("No pending tasks.")
         return
 
@@ -416,7 +949,8 @@ def main(
         raise RuntimeError("No CUDA devices")
     n_workers = min(parallelism, cuda_count, len(payloads))
 
-    random.shuffle(payloads)
+    if sampling == "full":
+        random.shuffle(payloads)
     ctx = multiprocessing.get_context("spawn")
     task_queue = ctx.Queue()
     result_queue = ctx.Queue()
@@ -427,11 +961,15 @@ def main(
 
     procs = []
     for idx in range(n_workers):
-        p = ctx.Process(target=worker, args=(task_queue, result_queue, idx, timeout), daemon=False)
+        p = ctx.Process(
+            target=worker,
+            args=(task_queue, result_queue, idx, timeout, min_evals, max_evals, precision, irt_model),
+            daemon=False,
+        )
         p.start()
         procs.append(p)
 
-    print(f"Queued {queued} runs across {len(payloads)} payloads ({n_workers} workers)")
+    print(f"Queued {len(payloads)} payloads ({n_workers} workers)")
 
     completed = len(results_by_key)
     done_workers = 0
@@ -463,8 +1001,10 @@ def main(
                 log_f.flush()
             except (TypeError, ValueError) as e:
                 print(f"Warning: failed to serialize result for {result.get('benchmark')}: {e}")
-            tag = '\u2713' if result['success'] else '\u2717'
-            print(f"[{completed}/{total}] {result['benchmark']}-{result['difficulty']} - {result['opt']}: {tag}")
+            tag = "\u2713" if result["success"] else "\u2717"
+            difficulty = result.get("difficulty")
+            diff_label = f"{difficulty:.4f}" if isinstance(difficulty, (float, int)) else str(difficulty)
+            print(f"[{completed}/{total}] {result['benchmark']}-{diff_label} - {result['opt']}: {tag}")
     except KeyboardInterrupt:
         interrupted = True
         print("\nInterrupted. Saving progress...")

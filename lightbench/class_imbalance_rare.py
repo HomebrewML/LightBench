@@ -19,18 +19,19 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import trial
+from lightbench.utils import difficulty_to_kwargs, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"n_samples": 1000, "input_dim": 20, "hidden_dim": 16, "imbalance_ratio": 0.2, "noise_level": 0.1},
-    "easy": {"n_samples": 2000, "input_dim": 32, "hidden_dim": 24, "imbalance_ratio": 0.1, "noise_level": 0.2},
-    "medium": {"n_samples": 5000, "input_dim": 48, "hidden_dim": 32, "imbalance_ratio": 0.05, "noise_level": 0.3},
-    "hard": {"n_samples": 10000, "input_dim": 64, "hidden_dim": 48, "imbalance_ratio": 0.02, "noise_level": 0.4},
-    "extreme": {"n_samples": 20000, "input_dim": 96, "hidden_dim": 64, "imbalance_ratio": 0.01, "noise_level": 0.5},
-    "nightmare": {"n_samples": 50000, "input_dim": 128, "hidden_dim": 96, "imbalance_ratio": 0.005, "noise_level": 0.6},
+difficulty_spec = {
+    "params": {
+        "n_samples": {"lo": 1000, "hi": 50000, "scale": "log", "dtype": "int"},
+        "input_dim": {"lo": 20, "hi": 128, "scale": "linear", "dtype": "int"},
+        "hidden_dim": {"lo": 16, "hi": 96, "scale": "linear", "dtype": "int"},
+        "imbalance_ratio": {"lo": 0.2, "hi": 0.005, "scale": "log"},
+        "noise_level": {"lo": 0.1, "hi": 0.6, "scale": "linear"},
+    }
 }
 
 
@@ -106,7 +107,7 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 25,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
     """
     Class imbalance rare event detection benchmark.
@@ -114,13 +115,12 @@ def main(
     Tests optimizer's ability to learn from severely imbalanced datasets
     where detecting rare positive events is critical.
     """
-    if config:
-        cfg = configs.get(config, {})
-        n_samples = cfg.get("n_samples", n_samples)
-        input_dim = cfg.get("input_dim", input_dim)
-        hidden_dim = cfg.get("hidden_dim", hidden_dim)
-        imbalance_ratio = cfg.get("imbalance_ratio", imbalance_ratio)
-        noise_level = cfg.get("noise_level", noise_level)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    n_samples = kwargs["n_samples"]
+    input_dim = kwargs["input_dim"]
+    hidden_dim = kwargs["hidden_dim"]
+    imbalance_ratio = kwargs["imbalance_ratio"]
+    noise_level = kwargs["noise_level"]
 
     model = ImbalancedClassifier(n_samples, input_dim, hidden_dim, imbalance_ratio, noise_level).cuda()
 

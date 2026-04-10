@@ -7,19 +7,12 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import param_norm_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"max_batch": 65536},
-    "easy": {"max_batch": 8192},
-    "medium": {"max_batch": 1024},
-    "hard": {"max_batch": 128},
-    "extreme": {"max_batch": 16},
-    "nightmare": {"max_batch": 2},
-}
+difficulty_spec = {"param": "max_batch", "lo": 65536, "hi": 2, "scale": "log", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -47,9 +40,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    max_batch = configs.get(config, {}).get("max_batch", 256)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    max_batch = kwargs.get("max_batch", 256)
     model = Model(max_batch).cuda()
 
     trial(

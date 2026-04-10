@@ -93,7 +93,7 @@ def parse_opt_name(name: str) -> tuple[str, dict]:
     while True:
         for prefix, kw in _OPT_PREFIXES:
             if name.startswith(prefix):
-                name = name[len(prefix):]
+                name = name[len(prefix) :]
                 kwargs.update(kw)
                 break
         else:
@@ -102,6 +102,7 @@ def parse_opt_name(name: str) -> tuple[str, dict]:
 
 
 # --- Validator ---
+
 
 def _fc_compare(inp, other, minimal_improvement):
     return other.reshape(1, 1, -1) * (1 - minimal_improvement.reshape(-1, 1, 1)) < inp.reshape(1, -1, 1)
@@ -116,17 +117,35 @@ def _fc_step(comparison, consecutive_failures, max_consecutive_failures, failure
 
 def _validator_step(
     loss,
-    step, seen_until, ema_states, update_factor,
-    global_min_loss, gm_cf, gm_mcf, gm_mi,
-    global_avg_loss, global_avg_step, ga_cf, ga_mcf, ga_mi,
-    ema_cf, ema_mcf, ema_mi,
-    weighting, indices, triu_rows, triu_cols, warmup, ema_index, ema_patience,
+    step,
+    seen_until,
+    ema_states,
+    update_factor,
+    global_min_loss,
+    gm_cf,
+    gm_mcf,
+    gm_mi,
+    global_avg_loss,
+    global_avg_step,
+    ga_cf,
+    ga_mcf,
+    ga_mi,
+    ema_cf,
+    ema_mcf,
+    ema_mi,
+    weighting,
+    indices,
+    triu_rows,
+    triu_cols,
+    warmup,
+    ema_index,
+    ema_patience,
 ):
     new_step = step + 1
     new_seen_until = torch.maximum(seen_until, new_step - 1)
 
     beta = 1 - update_factor
-    uf = update_factor / (1 - beta ** new_step)
+    uf = update_factor / (1 - beta**new_step)
     new_ema = ema_states + uf * (loss - ema_states)
     ema_loss = new_ema[ema_index]
 
@@ -149,9 +168,7 @@ def _validator_step(
     lc_failed, new_ema_cf = _fc_step(lc_flat, ema_cf, ema_mcf, ema_patience)
 
     result = (gm_failed | ga_failed | lc_failed) & (new_step >= warmup)
-    return (result, new_step, new_seen_until, new_ema,
-            new_gm_cf, new_ga_cf, new_ema_cf,
-            new_gml, new_gal, new_gas)
+    return (result, new_step, new_seen_until, new_ema, new_gm_cf, new_ga_cf, new_ema_cf, new_gml, new_gal, new_gas)
 
 
 _compiled_validator_step = _validator_step
@@ -193,7 +210,7 @@ class Validator:
         self.ga_cf = torch.zeros(steps, dtype=torch.int64, device=self.device)
 
         w = torch.arange(1, 1 + steps, device=self.device, dtype=torch.float64).clamp(min=self.warmup).unsqueeze(0)
-        self.weighting = functools.reduce(torch.minimum, [w ** p * f for f, p in global_mapping.items()])
+        self.weighting = functools.reduce(torch.minimum, [w**p * f for f, p in global_mapping.items()])
 
         self.step = torch.zeros((), dtype=torch.int64, device=self.device)
         self.seen_until = torch.zeros((), dtype=torch.int64, device=self.device)
@@ -215,12 +232,29 @@ class Validator:
     def _step_args(self, loss, step, seen_until, ema_states, gm_cf, ga_cf, ema_cf, gml, gal, gas):
         return (
             loss,
-            step, seen_until, ema_states, self.update_factor,
-            gml, gm_cf, self.gm_mcf, self.gm_mi,
-            gal, gas, ga_cf, self.ga_mcf, self.ga_mi,
-            ema_cf, self.ema_mcf, self.ema_mi,
-            self.weighting, self.indices, self.triu_rows, self.triu_cols,
-            self.warmup, self.ema_index, self.ema_patience,
+            step,
+            seen_until,
+            ema_states,
+            self.update_factor,
+            gml,
+            gm_cf,
+            self.gm_mcf,
+            self.gm_mi,
+            gal,
+            gas,
+            ga_cf,
+            self.ga_mcf,
+            self.ga_mi,
+            ema_cf,
+            self.ema_mcf,
+            self.ema_mi,
+            self.weighting,
+            self.indices,
+            self.triu_rows,
+            self.triu_cols,
+            self.warmup,
+            self.ema_index,
+            self.ema_patience,
         )
 
     def _write_shared(self, seen_until, gml, gal, gas):
@@ -230,14 +264,22 @@ class Validator:
         self.global_avg_step.copy_(gas)
 
     def __call__(self, loss):
-        (result, self.step, seen_until, self.ema_states,
-         self.gm_cf, self.ga_cf, self.ema_cf,
-         gml, gal, gas
-        ) = _compiled_validator_step(*self._step_args(
-            loss, self.step, self.seen_until, self.ema_states,
-            self.gm_cf, self.ga_cf, self.ema_cf,
-            self.global_min_loss, self.global_avg_loss, self.global_avg_step,
-        ))
+        (result, self.step, seen_until, self.ema_states, self.gm_cf, self.ga_cf, self.ema_cf, gml, gal, gas) = (
+            _compiled_validator_step(
+                *self._step_args(
+                    loss,
+                    self.step,
+                    self.seen_until,
+                    self.ema_states,
+                    self.gm_cf,
+                    self.ga_cf,
+                    self.ema_cf,
+                    self.global_min_loss,
+                    self.global_avg_loss,
+                    self.global_avg_step,
+                )
+            )
+        )
         self._write_shared(seen_until, gml, gal, gas)
         return result
 
@@ -248,10 +290,20 @@ class Validator:
 
         triggered = torch.tensor(False, device=self.device)
         for k in range(n):
-            (result, step, seen_until, ema_states, gm_cf, ga_cf, ema_cf, gml, gal, gas
-            ) = _compiled_validator_step(*self._step_args(
-                losses[k], step, seen_until, ema_states, gm_cf, ga_cf, ema_cf, gml, gal, gas,
-            ))
+            (result, step, seen_until, ema_states, gm_cf, ga_cf, ema_cf, gml, gal, gas) = _compiled_validator_step(
+                *self._step_args(
+                    losses[k],
+                    step,
+                    seen_until,
+                    ema_states,
+                    gm_cf,
+                    ga_cf,
+                    ema_cf,
+                    gml,
+                    gal,
+                    gas,
+                )
+            )
             triggered = triggered | result
 
         self.step, self.ema_states = step, ema_states
@@ -261,6 +313,7 @@ class Validator:
 
 
 # --- Exceptions ---
+
 
 class Stop(Exception):
     pass
@@ -276,10 +329,18 @@ class SkipConfig(ValueError):
 
 # --- Plotting ---
 
+
 class Plotter(nn.Module):
-    def __init__(self, objective_fn, x_limits=(-5, 5), y_limits=(-5, 5),
-                 resolution=300, transform=None, inverse_transform=None,
-                 should_normalize: bool = True):
+    def __init__(
+        self,
+        objective_fn,
+        x_limits=(-5, 5),
+        y_limits=(-5, 5),
+        resolution=300,
+        transform=None,
+        inverse_transform=None,
+        should_normalize: bool = True,
+    ):
         super().__init__()
         self.should_normalize = should_normalize
         self.objective = objective_fn
@@ -382,10 +443,10 @@ class MultiPlotter:
             color = colors[idx % len(colors)]
             trajectory = np.array(plotter.trajectory)
             ax.plot(trajectory[:, 0], trajectory[:, 1], ".-", color=color, label=label)
-            ax.scatter(trajectory[0, 0], trajectory[0, 1], color=color,
-                       edgecolors="black", linewidths=0.8, s=70, marker="o")
-            ax.scatter(trajectory[-1, 0], trajectory[-1, 1], color=color,
-                       linewidths=1.6, s=90, marker="x")
+            ax.scatter(
+                trajectory[0, 0], trajectory[0, 1], color=color, edgecolors="black", linewidths=0.8, s=70, marker="o"
+            )
+            ax.scatter(trajectory[-1, 0], trajectory[-1, 1], color=color, linewidths=1.6, s=90, marker="x")
 
         ax.set_xlabel("x")
         ax.set_ylabel("y")
@@ -424,10 +485,23 @@ _MAX_TOTAL_EXCEPTIONS = 32
 
 
 class Objective:
-    def __init__(self, model, opt, steps, group, data, loss_fn, win_condition,
-                 weight_decay, warmup_trials, eval_callback,
-                 ema_index: int = 0, device: torch.device | str = "cuda",
-                 dtype: torch.dtype | None = None, **kwargs):
+    def __init__(
+        self,
+        model,
+        opt,
+        steps,
+        group,
+        data,
+        loss_fn,
+        win_condition,
+        weight_decay,
+        warmup_trials,
+        eval_callback,
+        ema_index: int = 0,
+        device: torch.device | str = "cuda",
+        dtype: torch.dtype | None = None,
+        **kwargs,
+    ):
         self.device = torch.device(device)
         self.dtype = dtype
         self.model = self._move(model)
@@ -498,9 +572,15 @@ class Objective:
         self.did_win |= won
         return self.did_win
 
-    def _inner(self, params, model_override=None, *,
-               allow_validator_stop: bool = True, allow_win_condition: bool = True,
-               use_precond_init_scale: bool = False):
+    def _inner(
+        self,
+        params,
+        model_override=None,
+        *,
+        allow_validator_stop: bool = True,
+        allow_win_condition: bool = True,
+        use_precond_init_scale: bool = False,
+    ):
         input_kwargs = locals()
         input_kwargs.pop("self")
         callback_offset = len(self.callback_results)
@@ -510,8 +590,14 @@ class Objective:
         params_dict = self._format_params(params, use_precond_init_scale)
         model_template = self.model if model_override is None else model_override
         self.m = self._clone_model(model_template)
-        o = get_optim(self.opt, self.m.parameters(), **params_dict,
-                      weight_decay=self.weight_decay, warmup_steps=self.steps // 10, **self.kwargs)
+        o = get_optim(
+            self.opt,
+            self.m.parameters(),
+            **params_dict,
+            weight_decay=self.weight_decay,
+            warmup_steps=self.steps // 10,
+            **self.kwargs,
+        )
         validator = self.validator.new()
         loss_buf = torch.empty(self.steps, dtype=torch.float64, device=self.device)
         buf_idx = 0
@@ -619,7 +705,11 @@ class Objective:
             self.best_at = self.attempt
             self.avg = np.log(np.array(params))
         if not self.disable_early_stopping:
-            if self.best_at > 0 and self.best_at * 8 < self.attempt and self.attempt - self.best_at > self.warmup_trials:
+            if (
+                self.best_at > 0
+                and self.best_at * 8 < self.attempt
+                and self.attempt - self.best_at > self.warmup_trials
+            ):
                 raise Stop
             if time.perf_counter() >= self.deadline:
                 raise TimeoutStop
@@ -731,8 +821,14 @@ class Objective:
         params_dict = self._format_params(params, use_precond_init_scale)
         model_template = self.model if model_override is None else model_override
         replay_model = self._clone_model(model_template)
-        optimizer = get_optim(self.opt, replay_model.parameters(), **params_dict,
-                              weight_decay=self.weight_decay, warmup_steps=self.steps // 10, **self.kwargs)
+        optimizer = get_optim(
+            self.opt,
+            replay_model.parameters(),
+            **params_dict,
+            weight_decay=self.weight_decay,
+            warmup_steps=self.steps // 10,
+            **self.kwargs,
+        )
         period = callback_period if callback_period is not None else max(1, self.group)
 
         for step_idx in range(self.steps):
@@ -786,7 +882,7 @@ class Objective:
         ema = np.zeros_like(self.hyperparam_log_history[0])
         for t, log_vals in enumerate(self.hyperparam_log_history, 1):
             ema = beta * ema + (1 - beta) * log_vals
-        return ema / (1 - beta ** t)
+        return ema / (1 - beta**t)
 
     def get_best(self):
         if self.avg is None:
@@ -801,6 +897,7 @@ class Objective:
 
 # --- Win conditions ---
 
+
 def disabled_win_condition(*_args, **_kwargs):
     return False, {}
 
@@ -808,6 +905,7 @@ def disabled_win_condition(*_args, **_kwargs):
 def loss_win_condition(target):
     def win(_model, loss: float):
         return loss <= target, {}
+
     return win
 
 
@@ -815,6 +913,7 @@ def param_norm_win_condition(target, offset):
     def win(model, loss):
         with torch.no_grad():
             return model.param.add(offset).square().mean().sqrt().item() < target, {}
+
     return win
 
 
@@ -822,10 +921,34 @@ def param0_win_condition(target):
     def win(model, loss):
         with torch.no_grad():
             return model.param[0].item() < target, {}
+
     return win
 
 
+# --- Difficulty mapping ---
+
+
+def difficulty_to_kwargs(spec, d):
+    """Map d in [0, 1] to benchmark Model constructor kwargs. 0=easiest, 1=hardest."""
+    d = max(0.0, min(1.0, d))
+    if "param" in spec:
+        lo, hi = spec["lo"], spec["hi"]
+        val = lo * (hi / lo) ** d if spec.get("scale") == "log" else lo + d * (hi - lo)
+        if spec.get("dtype") == "int":
+            val = max(1, int(round(val)))
+        return {spec["param"]: val}
+    result = {}
+    for name, ps in spec["params"].items():
+        lo, hi = ps["lo"], ps["hi"]
+        val = lo * (hi / lo) ** d if ps.get("scale") == "log" else lo + d * (hi - lo)
+        if ps.get("dtype") == "int":
+            val = max(0, int(round(val)))
+        result[name] = val
+    return result
+
+
 # --- Utilities ---
+
 
 def set_seed(seed: int = 0x1239121):
     torch.manual_seed(seed)
@@ -879,6 +1002,7 @@ def evaluate_test_accuracy(test_loader):
                 total += target.numel()
         model.train(was_training)
         return correct / total
+
     return _fn
 
 
@@ -899,21 +1023,37 @@ _trial_result: dict | None = None
 def _format_config_str(opt_label, winning, ema_beta, ema_params):
     fmt = lambda v: f"{v:.5f}" if np.isfinite(v) else "nan"
     w = winning
-    parts = [f"{opt_label}(lr={fmt(w['lr'])}, betas=({1 - w['1mbeta1']:.3f}, {1 - w['1mbeta2']:.4f}), "
-             f"shampoo_beta={1 - w['1mshampoo_beta']:.3f})"]
+    parts = [
+        f"{opt_label}(lr={fmt(w['lr'])}, betas=({1 - w['1mbeta1']:.3f}, {1 - w['1mbeta2']:.4f}), "
+        f"shampoo_beta={1 - w['1mshampoo_beta']:.3f})"
+    ]
     if ema_params is not None:
         e = ema_params
-        parts.append(f"EMA\u03b2={ema_beta:.2f}(lr={e[0]:.5f}, betas=({1 - e[1]:.3f}, {1 - e[2]:.4f}), "
-                     f"shampoo_beta={1 - e[3]:.3f})")
+        parts.append(
+            f"EMA\u03b2={ema_beta:.2f}(lr={e[0]:.5f}, betas=({1 - e[1]:.3f}, {1 - e[2]:.4f}), "
+            f"shampoo_beta={1 - e[3]:.3f})"
+        )
     return " | ".join(parts)
 
 
 def trial(
-    model, data, loss_fn, win_condition, steps, opt, weight_decay,
-    trials=10, group=256, return_best: bool = False,
-    warmup_trial_pct: float = 0.1, random_trials: int = 10,
-    eval_callback: Optional[Callable] = None, ema_beta: float = 0.9,
-    *, device: torch.device | str = "cuda", dtype: torch.dtype | str | None = None,
+    model,
+    data,
+    loss_fn,
+    win_condition,
+    steps,
+    opt,
+    weight_decay,
+    trials=10,
+    group=256,
+    return_best: bool = False,
+    warmup_trial_pct: float = 0.1,
+    random_trials: int = 10,
+    eval_callback: Optional[Callable] = None,
+    ema_beta: float = 0.9,
+    *,
+    device: torch.device | str = "cuda",
+    dtype: torch.dtype | str | None = None,
 ):
     if data is None:
         data = _none_data
@@ -966,10 +1106,19 @@ def trial(
             unscale = False
 
         obj = Objective(
-            copy.deepcopy(base_template), opt_callable, steps, group,
-            data, loss_fn, win_condition, weight_decay,
+            copy.deepcopy(base_template),
+            opt_callable,
+            steps,
+            group,
+            data,
+            loss_fn,
+            win_condition,
+            weight_decay,
             max(trials * warmup_trial_pct, 1 + random_trials),
-            eval_callback, device=target_device, dtype=target_dtype, **extra_kwargs,
+            eval_callback,
+            device=target_device,
+            dtype=target_dtype,
+            **extra_kwargs,
         )
 
         if target_device.type == "cuda":
@@ -1019,11 +1168,16 @@ def trial(
                 model_result = obj.get_best()
             else:
                 model_result = obj.evaluate_params(
-                    ema_params, model_override=plotter_template if plotter_template else None)
+                    ema_params, model_override=plotter_template if plotter_template else None
+                )
             if isinstance(model_result, Plotter):
                 print(f"[{opt_label}] Replay trajectory length: {len(model_result.trajectory)}")
-            results.append({"label": opt_label, "model": model_result,
-                            "best_loss": obj.best_loss, "callback_results": obj.callback_results or None})
+            results.append({
+                "label": opt_label,
+                "model": model_result,
+                "best_loss": obj.best_loss,
+                "callback_results": obj.callback_results or None,
+            })
 
     if not return_best:
         return

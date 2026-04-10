@@ -7,19 +7,12 @@ from heavyball.utils import set_torch
 from torch import nn
 
 from lightbench import resolve_dtype
-from lightbench.utils import loss_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"max_delay": 2},
-    "easy": {"max_delay": 4},
-    "medium": {"max_delay": 16},
-    "hard": {"max_delay": 64},
-    "extreme": {"max_delay": 128},
-    "nightmare": {"max_delay": 256},
-}
+difficulty_spec = {"param": "max_delay", "lo": 2, "hi": 256, "scale": "log", "dtype": "int"}
 
 
 class Model(nn.Module):
@@ -58,9 +51,10 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
-    max_delay = configs.get(config, {}).get("max_delay", 4)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    max_delay = kwargs.get("max_delay", 4)
     dtype = resolve_dtype(dtype)
     model = Model(max_delay).cuda().double()
 

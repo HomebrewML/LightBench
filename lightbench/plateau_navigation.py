@@ -8,19 +8,12 @@ from heavyball.utils import set_torch
 from torch import nn
 
 from lightbench import resolve_dtype
-from lightbench.utils import Plotter, disabled_win_condition, loss_win_condition, trial
+from lightbench.utils import Plotter, difficulty_to_kwargs, disabled_win_condition, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {"scale": 1},
-    "easy": {"scale": 4},
-    "medium": {"scale": 8},
-    "hard": {"scale": 12},
-    "extreme": {"scale": 16},
-    "nightmare": {"scale": 20},
-}
+difficulty_spec = {"param": "scale", "lo": 1, "hi": 20, "scale": "linear"}
 
 
 def objective(x, y, scale: float):
@@ -49,12 +42,13 @@ def main(
     show_image: bool = False,
     trials: int = 100,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
     ema_beta: float = 0.9,
 ):
     if isinstance(opt, str):
         opt = [opt]
-    scale = configs.get(config, {}).get("scale", 4)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    scale = kwargs["scale"]
 
     dtype = resolve_dtype(dtype)
     coords = (1.5, 1.5)  # Start outside the plateau

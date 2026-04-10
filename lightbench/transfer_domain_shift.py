@@ -19,60 +19,20 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import trial
+from lightbench.utils import difficulty_to_kwargs, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-configs = {
-    "trivial": {
-        "feature_dim": 32,
-        "n_classes": 4,
-        "n_samples": 500,
-        "domain_shift_strength": 0.1,
-        "pretrain_noise": 0.05,
-        "freeze_layers": 0,
-    },
-    "easy": {
-        "feature_dim": 64,
-        "n_classes": 8,
-        "n_samples": 1000,
-        "domain_shift_strength": 0.3,
-        "pretrain_noise": 0.1,
-        "freeze_layers": 1,
-    },
-    "medium": {
-        "feature_dim": 128,
-        "n_classes": 16,
-        "n_samples": 2000,
-        "domain_shift_strength": 0.5,
-        "pretrain_noise": 0.2,
-        "freeze_layers": 2,
-    },
-    "hard": {
-        "feature_dim": 256,
-        "n_classes": 32,
-        "n_samples": 4000,
-        "domain_shift_strength": 0.7,
-        "pretrain_noise": 0.3,
-        "freeze_layers": 3,
-    },
-    "extreme": {
-        "feature_dim": 512,
-        "n_classes": 64,
-        "n_samples": 8000,
-        "domain_shift_strength": 0.8,
-        "pretrain_noise": 0.4,
-        "freeze_layers": 4,
-    },
-    "nightmare": {
-        "feature_dim": 1024,
-        "n_classes": 128,
-        "n_samples": 16000,
-        "domain_shift_strength": 0.9,
-        "pretrain_noise": 0.5,
-        "freeze_layers": 5,
-    },
+difficulty_spec = {
+    "params": {
+        "feature_dim": {"lo": 32, "hi": 1024, "scale": "log", "dtype": "int"},
+        "n_classes": {"lo": 4, "hi": 128, "scale": "log", "dtype": "int"},
+        "n_samples": {"lo": 500, "hi": 16000, "scale": "log", "dtype": "int"},
+        "domain_shift_strength": {"lo": 0.1, "hi": 0.9, "scale": "linear"},
+        "pretrain_noise": {"lo": 0.05, "hi": 0.5, "scale": "linear"},
+        "freeze_layers": {"lo": 0, "hi": 5, "scale": "linear", "dtype": "int"},
+    }
 }
 
 
@@ -166,7 +126,7 @@ def main(
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     trials: int = 20,
     win_condition_multiplier: float = 1.0,
-    config: Optional[str] = None,
+    config: Optional[float] = None,
 ):
     """
     Transfer learning domain shift robustness benchmark.
@@ -174,14 +134,13 @@ def main(
     Tests optimizer's ability to adapt pre-trained models to new domains
     with distribution shift, simulating real-world transfer learning scenarios.
     """
-    if config:
-        cfg = configs.get(config, {})
-        feature_dim = cfg.get("feature_dim", feature_dim)
-        n_classes = cfg.get("n_classes", n_classes)
-        n_samples = cfg.get("n_samples", n_samples)
-        domain_shift_strength = cfg.get("domain_shift_strength", domain_shift_strength)
-        pretrain_noise = cfg.get("pretrain_noise", pretrain_noise)
-        freeze_layers = cfg.get("freeze_layers", freeze_layers)
+    kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
+    feature_dim = kwargs["feature_dim"]
+    n_classes = kwargs["n_classes"]
+    n_samples = kwargs["n_samples"]
+    domain_shift_strength = kwargs["domain_shift_strength"]
+    pretrain_noise = kwargs["pretrain_noise"]
+    freeze_layers = kwargs["freeze_layers"]
 
     model = TransferLearningModel(
         feature_dim, n_classes, n_samples, domain_shift_strength, pretrain_noise, freeze_layers
