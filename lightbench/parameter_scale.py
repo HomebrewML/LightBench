@@ -10,7 +10,13 @@ from lightbench.utils import loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-configs = {"easy": {"scale": 1e1}, "medium": {"scale": 1e3}, "hard": {"scale": 1e5}}
+configs = {"trivial": {"scale": 1},
+           "easy": {"scale": 1e1},
+           "medium": {"scale": 1e3},
+           "hard": {"scale": 1e5},
+           "extreme": {"scale": 1e7},
+           "nightmare": {"scale": 1e9},
+           }
 
 
 class Model(nn.Module):

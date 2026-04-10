@@ -25,6 +25,7 @@ _EXCLUDED = {
     "loss_contour",
     "relu_boundaries",
     "grokking",
+    "qrnn",
 }
 
 

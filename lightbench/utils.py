@@ -604,6 +604,8 @@ class Objective:
     def objective(self, params):
         self.attempt += 1
         target, _, loss = self._inner(params)
+        if self.attempt == 1:
+            self.deadline = time.perf_counter() + _BENCHMARK_TIMEOUT_SECONDS
         target = float(target)
         loss = float(loss)
         if not np.isfinite(target):

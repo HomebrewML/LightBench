@@ -7,6 +7,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from lightbench import resolve_dtype
+from lightbench.qrnn import QRNNLayer
 from lightbench.utils import loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
@@ -23,21 +24,15 @@ configs = {
 
 
 class Model(nn.Module):
-    def __init__(self, size, depth):
+    def __init__(self, size):
         super().__init__()
         self.embed = nn.Embedding(2, size)
-        self.enc = nn.LSTM(size, size, depth, batch_first=False)
-        self.enc.flatten_parameters()
-        self.proj = nn.Sequential(
-            nn.LayerNorm(size),
-            nn.Linear(size, 1),
-        )
+        self.qrnn = QRNNLayer(size, size)
+        self.proj = nn.Sequential(nn.LayerNorm(size), nn.Linear(size, 1))
 
     def forward(self, inp):
-        inp = inp.transpose(0, 1)
-        inp = self.embed(inp.squeeze(-1).long())
-        out, _ = torch.compiler.disable()(self.enc)(inp)
-        return self.proj(out[-1, :])
+        x = self.embed(inp.squeeze(-1).long())
+        return self.proj(self.qrnn(x)[:, -1])
 
 
 @app.command()
@@ -45,7 +40,6 @@ def main(
     dtype: str = typer.Option("float32", help="Data type to use"),
     length: int = 64,
     size: int = 64,
-    depth: int = 1,
     batch: int = 256,
     steps: int = 10,
     weight_decay: float = 0,
@@ -57,24 +51,15 @@ def main(
     length = configs.get(config, {}).get("length", length)
     dtype = resolve_dtype(dtype)
     torch.manual_seed(0x1239121)
-    model = Model(size, depth).cuda()
+    model = Model(size).cuda()
 
     def data():
         inp = torch.randn((batch, length, 1), device="cuda", dtype=dtype)
         inp = inp > 0
         return inp.to(dtype), (inp.sum(1) % 2).to(dtype)
 
-    trial(
-        model,
-        data,
-        F.binary_cross_entropy_with_logits,
-        loss_win_condition(win_condition_multiplier * 1e-3),
-        steps,
-        opt,
-        weight_decay,
-        trials=trials,
-        dtype=dtype,
-    )
+    trial(model, data, F.binary_cross_entropy_with_logits, loss_win_condition(win_condition_multiplier * 1e-3),
+          steps, opt, weight_decay, trials=trials, dtype=dtype)
 
 
 if __name__ == "__main__":
