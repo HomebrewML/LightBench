@@ -8,18 +8,12 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from lightbench.utils import parse_opt_name
+from lightbench.utils import _DTYPE_PREREQ, _dtype_key, _parse_opt_fields
 
 _DIFFICULTIES = ("trivial", "easy", "medium", "hard", "extreme", "nightmare")
 _DIFF_IDX = {d: i for i, d in enumerate(_DIFFICULTIES)}
 _NDIFF = len(_DIFFICULTIES)
-_DTYPE_EDGES = (("bf16+ecc", "fp32"), ("bf16", "bf16+ecc"), ("fp16+ecc", "fp32"), ("fp16", "fp16+ecc"))
-_DTYPE_PREREQ = {child: parent for child, parent in _DTYPE_EDGES}
-_DTYPE_ORDER = {"fp32": 0, "bf16+ecc": 1, "bf16": 2, "fp16+ecc": 3, "fp16": 4}
-_OPT_RENAMES = {
-    "CachedPSGDKron": "PSGDKron(cached=True)",
-    "NewtonPSGDLRA": "PSGDLRA(hessian_approx=True, hvp_interval=10000000)",
-}
+_DTYPE_EDGES = tuple(_DTYPE_PREREQ.items())
 _DTYPE_STYLES = {"fp32": "bright_cyan", "bf16": "cyan", "bf16+ecc": "magenta", "fp16": "green", "fp16+ecc": "yellow"}
 
 
@@ -31,26 +25,6 @@ class FrontierBuild:
     resolved_cells: int
     unresolved_cells: int
     implied_failures: int
-
-
-def _dtype_key(dtype: str) -> tuple[int, str]:
-    return _DTYPE_ORDER.get(dtype, len(_DTYPE_ORDER)), dtype
-
-
-def normalize_optimizer_name(name: str) -> str:
-    if name.startswith("Foreach") and name != "Foreach":
-        name = name[len("Foreach"):]
-    return _OPT_RENAMES.get(name, name)
-
-
-def _parse_opt_fields(opt) -> tuple[str, str, str] | None:
-    try:
-        name, kwargs = parse_opt_name(opt)
-    except Exception:
-        return None
-    caution = "Unscaled" if kwargs.get("_unscale_caution") else ("Yes" if kwargs.get("caution") else "No")
-    mars = "Yes" if kwargs.get("mars") else "No"
-    return normalize_optimizer_name(name), caution, mars
 
 
 def load_results(path: str) -> pd.DataFrame:

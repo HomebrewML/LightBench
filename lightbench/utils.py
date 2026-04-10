@@ -101,6 +101,57 @@ def parse_opt_name(name: str) -> tuple[str, dict]:
     return name, kwargs
 
 
+# --- Optimizer label normalization ---
+
+_OPT_RENAMES = {
+    "CachedPSGDKron": "PSGDKron(cached=True)",
+    "NewtonPSGDLRA": "PSGDLRA(hessian_approx=True, hvp_interval=10000000)",
+}
+
+_DTYPE_PREREQ = {"bf16+ecc": "fp32", "bf16": "bf16+ecc", "fp16+ecc": "fp32", "fp16": "fp16+ecc"}
+_DTYPE_ORDER = {"fp32": 0, "bf16+ecc": 1, "bf16": 2, "fp16+ecc": 3, "fp16": 4}
+
+
+def _dtype_key(dtype: str) -> tuple[int, str]:
+    return _DTYPE_ORDER.get(dtype, len(_DTYPE_ORDER)), dtype
+
+
+def normalize_optimizer_name(name: str) -> str:
+    if name.startswith("Foreach") and name != "Foreach":
+        name = name[len("Foreach") :]
+    return _OPT_RENAMES.get(name, name)
+
+
+def _parse_opt_fields(opt) -> tuple[str, str, str] | None:
+    try:
+        name, kwargs = parse_opt_name(opt)
+    except Exception:
+        return None
+    caution = "Unscaled" if kwargs.get("_unscale_caution") else ("Yes" if kwargs.get("caution") else "No")
+    mars = "Yes" if kwargs.get("mars") else "No"
+    return normalize_optimizer_name(name), caution, mars
+
+
+def _compose_optimizer(optimizer, caution, mars):
+    parts = []
+    if caution == "Yes":
+        parts.append("cautious")
+    elif caution and caution != "No":
+        parts.append(caution)
+    if mars == "Yes":
+        parts.append("mars")
+    elif mars and mars != "No":
+        parts.append(mars)
+    if optimizer:
+        parts.append(optimizer)
+    return "-".join(parts)
+
+
+def opt_label(opt_str):
+    fields = _parse_opt_fields(opt_str)
+    return _compose_optimizer(*fields) if fields else opt_str
+
+
 # --- Validator ---
 
 
@@ -928,23 +979,17 @@ def param0_win_condition(target):
 # --- Difficulty mapping ---
 
 
+def _interp(lo, hi, d, spec):
+    val = lo * (hi / lo) ** d if spec.get("scale") == "log" else lo + d * (hi - lo)
+    return int(round(val)) if spec.get("dtype") == "int" else val
+
+
 def difficulty_to_kwargs(spec, d):
-    """Map d in [0, 1] to benchmark Model constructor kwargs. 0=easiest, 1=hardest."""
+    """Map d in [0, 1] to benchmark kwargs. 0=easiest, 1=hardest."""
     d = max(0.0, min(1.0, d))
     if "param" in spec:
-        lo, hi = spec["lo"], spec["hi"]
-        val = lo * (hi / lo) ** d if spec.get("scale") == "log" else lo + d * (hi - lo)
-        if spec.get("dtype") == "int":
-            val = max(1, int(round(val)))
-        return {spec["param"]: val}
-    result = {}
-    for name, ps in spec["params"].items():
-        lo, hi = ps["lo"], ps["hi"]
-        val = lo * (hi / lo) ** d if ps.get("scale") == "log" else lo + d * (hi - lo)
-        if ps.get("dtype") == "int":
-            val = max(0, int(round(val)))
-        result[name] = val
-    return result
+        return {spec["param"]: _interp(spec["lo"], spec["hi"], d, spec)}
+    return {name: _interp(ps["lo"], ps["hi"], d, ps) for name, ps in spec["params"].items()}
 
 
 # --- Utilities ---

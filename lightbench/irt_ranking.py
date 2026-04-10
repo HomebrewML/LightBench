@@ -5,49 +5,12 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from lightbench.utils import parse_opt_name
-
-_DTYPE_PREREQ = {"bf16+ecc": "fp32", "bf16": "bf16+ecc", "fp16+ecc": "fp32", "fp16": "fp16+ecc"}
-_DTYPE_ORDER = {"fp32": 0, "bf16+ecc": 1, "bf16": 2, "fp16+ecc": 3, "fp16": 4}
-_OPT_RENAMES = {
-    "CachedPSGDKron": "PSGDKron(cached=True)",
-    "NewtonPSGDLRA": "PSGDLRA(hessian_approx=True, hvp_interval=10000000)",
-}
-
-
-def _dtype_key(dtype: str) -> tuple[int, str]:
-    return _DTYPE_ORDER.get(dtype, len(_DTYPE_ORDER)), dtype
-
-
-def normalize_optimizer_name(name: str) -> str:
-    if name.startswith("Foreach") and name != "Foreach":
-        name = name[len("Foreach") :]
-    return _OPT_RENAMES.get(name, name)
-
-
-def _parse_opt_fields(opt) -> tuple[str, str, str] | None:
-    try:
-        name, kwargs = parse_opt_name(opt)
-    except Exception:
-        return None
-    caution = "Unscaled" if kwargs.get("_unscale_caution") else ("Yes" if kwargs.get("caution") else "No")
-    mars = "Yes" if kwargs.get("mars") else "No"
-    return normalize_optimizer_name(name), caution, mars
-
-
-def _compose_optimizer(optimizer, caution, mars):
-    parts = []
-    if caution == "Yes":
-        parts.append("cautious")
-    elif caution and caution != "No":
-        parts.append(caution)
-    if mars == "Yes":
-        parts.append("mars")
-    elif mars and mars != "No":
-        parts.append(mars)
-    if optimizer:
-        parts.append(optimizer)
-    return "-".join(parts)
+from lightbench.utils import (
+    _DTYPE_PREREQ,
+    _compose_optimizer,
+    _dtype_key,
+    _parse_opt_fields,
+)
 
 
 @dataclass(frozen=True)
@@ -101,7 +64,6 @@ def load_results(
     error = df["error"].fillna("").astype(str).str.strip() if "error" in df else pd.Series("", index=df.index)
     skipped = error.str.startswith(("Skipped", "Gated"))
     state = np.where(skipped, np.nan, np.where(success, 1, 0))
-    state = np.where(np.isfinite(state), state, np.nan)
     df = df[np.isfinite(state)]
     if df.empty:
         return None
@@ -164,6 +126,8 @@ class IRTModel:
         self.bench_scale = np.asarray(bench_scale, dtype=float)
         self.theta_params = max(self.n_opts - 1, 0)
         self.beta_params = max(self.n_bench - 1, 0)
+        self.opt_index = {name: i for i, name in enumerate(opt_names)}
+        self.bench_index = {name: i for i, name in enumerate(bench_names)}
         self.dtype_index = {name: i for i, name in enumerate(dtype_names)}
         self.dtype_parent = {}
         for name in dtype_names:
@@ -266,7 +230,8 @@ class IRTModel:
     def neg_log_likelihood(self, x, data):
         opt_idx, bench_idx, dtype_idx, difficulty, outcome = data
         theta, beta, gamma, delta, log_gamma = self._unpack(x)
-        logits = theta[opt_idx] - delta[dtype_idx] - beta[bench_idx] - gamma[bench_idx] * difficulty
+        centered = (difficulty - self.bench_center[bench_idx]) / self.bench_scale[bench_idx]
+        logits = theta[opt_idx] - delta[dtype_idx] - beta[bench_idx] - gamma[bench_idx] * centered
         nll = np.logaddexp(0, logits) - outcome * logits
         loss = float(np.sum(nll))
         loss += 0.5 * np.sum(theta**2)
@@ -295,14 +260,17 @@ class IRTModel:
             return None
         return self._unpack(self.params)
 
+    def _hess_inv_dense(self):
+        if self.result is not None and self.result.hess_inv is not None:
+            try:
+                return np.array(self.result.hess_inv.todense())
+            except Exception:
+                return np.array(self.result.hess_inv)
+        return getattr(self, "_cached_hess_inv", None)
+
     def theta_se(self):
-        if self.result is None or self.result.hess_inv is None:
-            return np.full(self.n_opts, np.nan)
-        try:
-            cov = np.array(self.result.hess_inv.todense())
-        except Exception:
-            cov = np.array(self.result.hess_inv)
-        if cov.ndim != 2 or cov.shape[0] < self.theta_params:
+        cov = self._hess_inv_dense()
+        if cov is None or cov.ndim != 2 or cov.shape[0] < self.theta_params:
             return np.full(self.n_opts, np.nan)
         if self.n_opts <= 1:
             return np.zeros(self.n_opts, dtype=float)
@@ -322,6 +290,27 @@ class IRTModel:
             + self.bench_scale[bench_idx] * (theta[opt_idx] - delta[dtype_idx] - beta[bench_idx]) / gamma[bench_idx]
         )
 
+    def prior_for(self, opt_name, bench_name, dtype_name, precision):
+        if self.params is None:
+            return None
+        oi = self.opt_index.get(opt_name)
+        bi = self.bench_index.get(bench_name)
+        di = self.dtype_index.get(dtype_name)
+        if oi is None or bi is None or di is None:
+            return None
+        theta, beta, gamma, delta, _ = self._unpack(self.params)
+        g = gamma[bi] if np.isfinite(gamma[bi]) and gamma[bi] > 0 else 1.0
+        bs = max(self.bench_scale[bi], 1e-6)
+        dstar = float(np.clip(self.bench_center[bi] + bs * (theta[oi] - delta[di] - beta[bi]) / g, 0.0, 1.0))
+        slope = float(max(g / bs, 1e-3))
+        return dstar, slope, self.theta_se()[oi], precision
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_cached_hess_inv"] = self._hess_inv_dense()
+        state["result"] = None
+        return state
+
 
 def fit(data: ResultData, max_iter=500) -> IRTModel:
     model = IRTModel(
@@ -331,8 +320,7 @@ def fit(data: ResultData, max_iter=500) -> IRTModel:
         bench_center=data.bench_center,
         bench_scale=data.bench_scale,
     )
-    centered = (data.difficulty - model.bench_center[data.bench_idx]) / model.bench_scale[data.bench_idx]
-    model.fit((data.opt_idx, data.bench_idx, data.dtype_idx, centered, data.outcome), max_iter=max_iter)
+    model.fit((data.opt_idx, data.bench_idx, data.dtype_idx, data.difficulty, data.outcome), max_iter=max_iter)
     return model
 
 

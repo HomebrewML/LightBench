@@ -13,21 +13,16 @@ from queue import Empty
 import numpy as np
 import typer
 
-from lightbench.utils import SkipConfig, parse_opt_name, _HPARAM_NAMES
+from lightbench.utils import SkipConfig, parse_opt_name, _HPARAM_NAMES, _DTYPE_PREREQ, opt_label
 
 app = typer.Typer()
 
 _DTYPE_PREFIX = {"fp32": "fp32-", "bf16+ecc": "bf16+ecc-", "bf16": "bf16-", "fp16+ecc": "fp16+ecc-", "fp16": "fp16-"}
-_DTYPE_PREREQ = {"bf16+ecc": "fp32", "bf16": "bf16+ecc", "fp16+ecc": "fp32", "fp16": "fp16+ecc"}
 _WATCHDOG_SLACK = 30
 _GATE_MIN_PASS = 0.01
 _GATE_MASS = 0.05
 _POSTERIOR_Q = 0.05
 _POSTERIOR_EPS = 1e-3
-_OPT_RENAMES = {
-    "CachedPSGDKron": "PSGDKron(cached=True)",
-    "NewtonPSGDLRA": "PSGDLRA(hessian_approx=True, hvp_interval=10000000)",
-}
 
 
 def _normalize_dtype(value):
@@ -153,16 +148,12 @@ class _SearchState:
         precision,
         min_evals,
         max_evals,
-        opt,
-        bench,
-        dtype,
-        irt_prior,
+        prior=None,
         parent_results=None,
         prior_results=None,
         attempts_done=0,
     ):
         grid = _difficulty_grid(precision)
-        prior = _irt_prior_for(irt_prior, _opt_label_for_irt(opt), bench, dtype, precision)
         weights = _posterior_weights(grid, prior)
         hints = {}
         seen = set()
@@ -312,7 +303,7 @@ def _payload_priority(
     prior_results,
     attempts_by_dtype,
     gated_by_dtype,
-    irt_prior,
+    irt_model,
     precision,
     min_evals,
     max_evals,
@@ -326,10 +317,7 @@ def _payload_priority(
             precision=precision,
             min_evals=min_evals,
             max_evals=max_evals,
-            opt=opt,
-            bench=bench,
-            dtype=dt,
-            irt_prior=irt_prior,
+            prior=_get_prior(irt_model, opt, bench, dt, precision),
             prior_results=prior_results.get(dt, []),
             attempts_done=attempts_by_dtype.get(dt, 0),
         )
@@ -342,43 +330,6 @@ def _payload_priority(
     return score / active
 
 
-@dataclass(frozen=True)
-class _IrtPrior:
-    opt_index: dict[str, int]
-    bench_index: dict[str, int]
-    dtype_index: dict[str, int]
-    theta: np.ndarray
-    beta: np.ndarray
-    gamma: np.ndarray
-    delta: np.ndarray
-    theta_se: np.ndarray
-    bench_center: np.ndarray
-    bench_scale: np.ndarray
-
-
-def _opt_label_for_irt(opt_name: str) -> str:
-    try:
-        name, kwargs = parse_opt_name(opt_name)
-    except Exception:
-        return opt_name
-    if name.startswith("Foreach") and name != "Foreach":
-        name = name[len("Foreach") :]
-    name = _OPT_RENAMES.get(name, name)
-    caution = "Unscaled" if kwargs.get("_unscale_caution") else ("Yes" if kwargs.get("caution") else "No")
-    mars = "Yes" if kwargs.get("mars") else "No"
-    parts = []
-    if caution == "Yes":
-        parts.append("cautious")
-    elif caution and caution != "No":
-        parts.append(caution)
-    if mars == "Yes":
-        parts.append("mars")
-    elif mars and mars != "No":
-        parts.append(mars)
-    parts.append(name)
-    return "-".join(parts)
-
-
 def _build_irt_prior(path, *, max_iter, min_rows, steps=None, trials=None, timeout=None):
     if not path or not os.path.exists(path):
         return None
@@ -389,47 +340,13 @@ def _build_irt_prior(path, *, max_iter, min_rows, steps=None, trials=None, timeo
     data = load_results(path, steps=steps, trials=trials, timeout=timeout)
     if data is None or len(data.outcome) < min_rows:
         return None
-    model = fit(data, max_iter=max_iter)
-    unpacked = model.unpacked()
-    if unpacked is None:
-        return None
-    theta, beta, gamma, delta, _log_gamma = unpacked
-    return _IrtPrior(
-        opt_index={name: i for i, name in enumerate(model.opt_names)},
-        bench_index={name: i for i, name in enumerate(model.bench_names)},
-        dtype_index={name: i for i, name in enumerate(model.dtype_names)},
-        theta=theta,
-        beta=beta,
-        gamma=gamma,
-        delta=delta,
-        theta_se=model.theta_se(),
-        bench_center=model.bench_center,
-        bench_scale=model.bench_scale,
-    )
+    return fit(data, max_iter=max_iter)
 
 
-def _irt_prior_for(prior, opt_label, bench, dtype, precision):
-    if prior is None:
+def _get_prior(irt_model, opt, bench, dtype, precision):
+    if irt_model is None:
         return None
-    opt_idx = prior.opt_index.get(opt_label)
-    bench_idx = prior.bench_index.get(bench)
-    dtype_idx = prior.dtype_index.get(dtype)
-    if bench_idx is None or opt_idx is None or dtype_idx is None:
-        return None
-    theta = prior.theta[opt_idx]
-    beta = prior.beta[bench_idx]
-    gamma = prior.gamma[bench_idx]
-    delta = prior.delta[dtype_idx]
-    bench_center = prior.bench_center[bench_idx]
-    bench_scale = prior.bench_scale[bench_idx]
-    theta_se = prior.theta_se[opt_idx]
-    if not np.isfinite(gamma) or gamma <= 0:
-        gamma = 1.0
-    bench_scale = max(bench_scale, 1e-6)
-    dstar = bench_center + bench_scale * (theta - delta - beta) / gamma
-    dstar = float(np.clip(dstar, 0.0, 1.0))
-    slope = float(max(gamma / bench_scale, 1e-3))
-    return dstar, slope, theta_se, precision
+    return irt_model.prior_for(opt_label(opt), bench, dtype, precision)
 
 
 # --- Subprocess ---
@@ -572,7 +489,7 @@ def adaptive_search(
     precision,
     parent_results=None,
     prior_results=None,
-    irt_prior=None,
+    irt_model=None,
     attempts_done=0,
 ):
     results = []
@@ -580,10 +497,7 @@ def adaptive_search(
         precision=precision,
         min_evals=min_evals,
         max_evals=max_evals,
-        opt=opt,
-        bench=name,
-        dtype=dtype,
-        irt_prior=irt_prior,
+        prior=_get_prior(irt_model, opt, name, dtype, precision),
         parent_results=parent_results,
         prior_results=prior_results,
         attempts_done=attempts_done,
@@ -629,7 +543,7 @@ def adaptive_search(
     return results
 
 
-def worker(task_queue, result_queue, worker_index, timeout, min_evals, max_evals, precision, irt_prior):
+def worker(task_queue, result_queue, worker_index, timeout, min_evals, max_evals, precision, irt_model):
     import torch
 
     gpu = worker_index % torch.cuda.device_count()
@@ -655,10 +569,6 @@ def worker(task_queue, result_queue, worker_index, timeout, min_evals, max_evals
                         precision=precision,
                         min_evals=min_evals,
                         max_evals=max_evals,
-                        opt=opt,
-                        bench=name,
-                        dtype=parent,
-                        irt_prior=None,
                         prior_results=accumulated[parent],
                         attempts_done=attempts.get(parent, 0),
                     )
@@ -685,10 +595,7 @@ def worker(task_queue, result_queue, worker_index, timeout, min_evals, max_evals
                     precision=precision,
                     min_evals=min_evals,
                     max_evals=max_evals,
-                    opt=opt,
-                    bench=name,
-                    dtype=dt,
-                    irt_prior=irt_prior,
+                    prior=_get_prior(irt_model, opt, name, dt, precision),
                     parent_results=accumulated.get(parent, []) if parent else None,
                     prior_results=prior,
                     attempts_done=attempts.get(dt, 0),
@@ -709,7 +616,7 @@ def worker(task_queue, result_queue, worker_index, timeout, min_evals, max_evals
                     precision,
                     parent_results=accumulated.get(parent, []) if parent else None,
                     prior_results=prior,
-                    irt_prior=irt_prior,
+                    irt_model=irt_model,
                     attempts_done=attempts.get(dt, 0),
                 )
                 new_results = []
@@ -893,10 +800,7 @@ def main(
                 precision=precision,
                 min_evals=min_evals,
                 max_evals=max_evals,
-                opt=o,
-                bench=name,
-                dtype=dt,
-                irt_prior=irt_model,
+                prior=_get_prior(irt_model, o, name, dt, precision),
                 prior_results=prior_results.get(dt, []),
                 attempts_done=attempts_by_dtype.get(dt, 0),
             )
@@ -924,7 +828,7 @@ def main(
                 prior_results=p[5],
                 attempts_by_dtype=p[6],
                 gated_by_dtype=p[7],
-                irt_prior=irt_model,
+                irt_model=irt_model,
                 precision=precision,
                 min_evals=min_evals,
                 max_evals=max_evals,
