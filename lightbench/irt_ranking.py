@@ -64,11 +64,12 @@ def load_results(
     error = df["error"].fillna("").astype(str).str.strip() if "error" in df else pd.Series("", index=df.index)
     skipped = error.str.startswith(("Skipped", "Gated"))
     state = np.where(skipped, np.nan, np.where(success, 1, 0))
-    df = df[np.isfinite(state)]
+    mask = np.isfinite(state)
+    df = df[mask]
     if df.empty:
         return None
 
-    df["outcome"] = state.astype(int)
+    df["outcome"] = state[mask].astype(int)
 
     opt_names = sorted(df["optimizer"].unique().tolist())
     bench_names = sorted(df["benchmark"].unique().tolist())

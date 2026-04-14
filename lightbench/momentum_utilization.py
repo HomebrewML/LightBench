@@ -10,7 +10,7 @@ from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
-difficulty_spec = {"param": "weight", "lo": 0.004, "hi": 2, "scale": "log"}
+difficulty_spec = {"param": "weight", "lo": 0.1, "hi": 1000, "scale": "log"}
 
 
 class Model(nn.Module):
@@ -21,10 +21,10 @@ class Model(nn.Module):
         self.weight = weight
 
     def forward(self):
-        """Tests effective use of momentum for oscillating landscapes."""
-        self.t += 0.1
-        x = self.param
-        return (x.square() + self.weight * torch.sin(10 * x) * torch.cos(self.t)).mean()
+        self.t += 1
+        base = self.param.square().mean()
+        adversarial = self.weight * torch.sin(self.t * 0.1) * base
+        return base + adversarial - adversarial.detach()
 
 
 @app.command()

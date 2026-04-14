@@ -15,11 +15,16 @@ difficulty_spec = {"param": "range", "lo": 1, "hi": 6, "scale": "linear", "dtype
 class Model(nn.Module):
     def __init__(self, size, value_range):
         super().__init__()
-        self.scale = nn.Buffer(torch.logspace(-value_range, value_range, size))
         self.param = nn.Parameter(torch.randn(size))
+        D = torch.logspace(-value_range, value_range, size)
+        Q, _ = torch.linalg.qr(torch.randn(size, size))
+        alpha = value_range / 6
+        M = torch.eye(size) * (1 - alpha) + Q * alpha
+        M, _ = torch.linalg.qr(M)
+        self.register_buffer("A", D.sqrt().unsqueeze(1) * M)
 
     def forward(self):
-        return (self.param**2 * self.scale).mean()
+        return (self.A @ self.param).square().mean()
 
 
 @app.command()

@@ -10,7 +10,7 @@ from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, tri
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
 
-difficulty_spec = {"param": "frequency", "lo": 1000, "hi": 2, "scale": "log", "dtype": "int"}
+difficulty_spec = {"param": "frequency", "lo": 2, "hi": 1000, "scale": "log", "dtype": "int"}
 
 
 class Model(nn.Module):

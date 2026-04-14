@@ -13,18 +13,23 @@ from lightbench.utils import _DTYPE_PREREQ, _dtype_key, _parse_opt_fields
 _DIFFICULTIES = ("trivial", "easy", "medium", "hard", "extreme", "nightmare")
 _DIFF_IDX = {d: i for i, d in enumerate(_DIFFICULTIES)}
 _NDIFF = len(_DIFFICULTIES)
-_DTYPE_EDGES = tuple(_DTYPE_PREREQ.items())
 _DTYPE_STYLES = {"fp32": "bright_cyan", "bf16": "cyan", "bf16+ecc": "magenta", "fp16": "green", "fp16+ecc": "yellow"}
 
+# Transitive ancestors per dtype. Allows direct propagation even when
+# intermediate dtypes are absent from a particular matrix.
+_DTYPE_ANCESTORS: dict[str, tuple[str, ...]] = {}
+for _dt in ("fp32", "bf16+ecc", "bf16", "fp16+ecc", "fp16"):
+    _anc, _cur = [], _dt
+    while _cur in _DTYPE_PREREQ:
+        _cur = _DTYPE_PREREQ[_cur]
+        _anc.append(_cur)
+    _DTYPE_ANCESTORS[_dt] = tuple(_anc)
 
-@dataclass(frozen=True)
-class FrontierBuild:
-    games: dict[str, dict[str, int]]
-    labels: list[str]
-    unresolved_by_label: dict[str, int]
-    resolved_cells: int
-    unresolved_cells: int
-    implied_failures: int
+
+@dataclass
+class FilledMatrix:
+    dtypes: list[str]
+    cells: np.ndarray  # (len(dtypes), _NDIFF), values in {-1, 0, 1}
 
 
 def load_results(path: str) -> pd.DataFrame:
@@ -68,8 +73,8 @@ def load_results(path: str) -> pd.DataFrame:
     timed_out = df["timed_out"].astype(bool) if "timed_out" in df else pd.Series(False, index=df.index)
     error = df["error"] if "error" in df else pd.Series("", index=df.index)
     error = error.fillna("").astype(str).str.strip()
-    gated_fail = error.eq("") | error.str.startswith(("Skipped", "Gated"))
-    df["state"] = np.select([success, timed_out, gated_fail], [1, -1, -1], default=0).astype(np.int8)
+    definite_fail = error.eq("") | error.str.startswith(("Skipped", "Gated"))
+    df["state"] = np.select([success, timed_out, definite_fail], [1, -1, -1], default=0).astype(np.int8)
 
     return (
         df[cols]
@@ -78,208 +83,213 @@ def load_results(path: str) -> pd.DataFrame:
     )
 
 
-def _close_failures(states: np.ndarray, pairs: list[tuple[int, int]]) -> tuple[np.ndarray, int]:
-    observed_failures = states == -1
-    fails = np.maximum.accumulate(observed_failures, axis=1)
+def _fill_matrix(states: np.ndarray, pairs: list[tuple[int, int]]) -> np.ndarray:
+    """Fill a (n_dtypes, n_diff) matrix of {-1: fail, 0: unknown, 1: pass}.
+
+    Phase 1 — close failures (hard constraints, iterates to fixpoint):
+      Dtype hierarchy:  ancestor fails at j  ->  descendant fails at j
+      Difficulty mono:   fail at j            ->  fail at j+1 .. n-1
+      Hierarchy overrides contradictory passes.
+
+    Phase 2 — fill passes (never overwrites failures, iterates to fixpoint):
+      Dtype hierarchy:  descendant passes at j  ->  ancestor passes at j
+        (if the harder dtype passed, the easier one must have too)
+      Difficulty mono:   pass at j  ->  pass at 0 .. j-1
+    """
+    m = states.copy()
+    n_dt, n_diff = m.shape
+
+    # Phase 1: close failures, overriding contradictory passes
     while True:
-        prev = fails.copy()
+        prev = m.copy()
         for parent_i, child_i in pairs:
-            fails[child_i] |= fails[parent_i]
+            mask = m[parent_i] == -1
+            m[child_i] = np.where(mask, -1, m[child_i])
+        fails = m == -1
         fails = np.maximum.accumulate(fails, axis=1)
-        if np.array_equal(prev, fails):
+        m = np.where(fails, -1, m)
+        if np.array_equal(prev, m):
             break
-    return fails, int((fails & ~observed_failures).sum())
+
+    # Phase 2: fill passes (upward through hierarchy + leftward)
+    while True:
+        prev = m.copy()
+        # Child passes -> parent passes (only into unknown cells)
+        for parent_i, child_i in pairs:
+            mask = (m[child_i] == 1) & (m[parent_i] == 0)
+            m[parent_i] = np.where(mask, 1, m[parent_i])
+        # Pass at j -> pass at 0..j-1 (only into unknown cells)
+        for i in range(n_dt):
+            pass_idx = np.where(m[i] == 1)[0]
+            if len(pass_idx) == 0:
+                continue
+            max_pass = int(pass_idx.max())
+            for j in range(max_pass):
+                if m[i, j] == 0:
+                    m[i, j] = 1
+        if np.array_equal(prev, m):
+            break
+
+    return m
 
 
-def compute_frontiers(df: pd.DataFrame) -> FrontierBuild:
-    if df.empty:
-        return FrontierBuild({}, [], {}, 0, 0, 0)
+def _hierarchy_pairs(dtypes: list[str]) -> list[tuple[int, int]]:
+    """Build (parent_idx, child_idx) pairs for the given dtype list."""
+    dt_idx = {d: i for i, d in enumerate(dtypes)}
+    pairs: list[tuple[int, int]] = []
+    for dt in dtypes:
+        for anc in _DTYPE_ANCESTORS.get(dt, ()):
+            if anc in dt_idx:
+                pair = (dt_idx[anc], dt_idx[dt])
+                if pair not in pairs:
+                    pairs.append(pair)
+    return pairs
 
+
+def build_matrices(df: pd.DataFrame) -> dict[str, dict[str, FilledMatrix]]:
+    """Build filled (n_dtypes, n_diff) Pareto matrices keyed by [benchmark][suffix].
+
+    After building per-(benchmark, suffix) matrices from actual data, extends
+    each matrix so that every dtype that appears for a suffix in ANY benchmark
+    is present in ALL benchmarks for that suffix.  The fill then propagates
+    implied results (failures down, passes up) into the new rows.
+    """
     work = df[df["difficulty"].isin(_DIFF_IDX)].copy()
     if work.empty:
-        return FrontierBuild({}, [], {}, 0, 0, 0)
-    work["difficulty_idx"] = work["difficulty"].map(_DIFF_IDX).astype(int)
+        return {}
+    work["diff_idx"] = work["difficulty"].map(_DIFF_IDX).astype(int)
 
-    labels = sorted(work["label"].unique().tolist(), key=lambda l: (l.split(":", 1)[1], _dtype_key(l.split(":", 1)[0]), l))
-    games: dict[str, dict[str, int]] = {}
-    unresolved: dict[str, int] = {}
-    implied_failures = 0
-    contradictions: list[str] = []
-    cols = np.arange(_NDIFF)
-
+    result: dict[str, dict[str, FilledMatrix]] = {}
     for (benchmark, suffix), group in work.groupby(["benchmark", "suffix"], sort=True):
         dtypes = sorted(group["dtype"].unique().tolist(), key=_dtype_key)
-        dt_idx = {d: i for i, d in enumerate(dtypes)}
         states = (
-            group.pivot(index="dtype", columns="difficulty_idx", values="state")
+            group.pivot(index="dtype", columns="diff_idx", values="state")
             .reindex(index=dtypes, columns=range(_NDIFF), fill_value=0)
             .fillna(0)
             .astype(np.int8)
             .to_numpy()
         )
+        result.setdefault(benchmark, {})[suffix] = FilledMatrix(
+            dtypes=dtypes, cells=_fill_matrix(states, _hierarchy_pairs(dtypes)),
+        )
 
-        pairs = [(dt_idx[parent], dt_idx[child]) for child, parent in _DTYPE_PREREQ.items() if child in dt_idx and parent in dt_idx]
-        fails, implied = _close_failures(states, pairs)
-        implied_failures += implied
-        passes = states == 1
-
-        if np.any(fails & passes):
-            i, j = np.argwhere(fails & passes)[0]
-            contradictions.append(f"{benchmark}|{dtypes[i]}-{_DIFFICULTIES[j]}")
-            continue
-
-        lo = np.where(passes, cols, -1).max(axis=1)
-        hi = np.where(fails, cols, _NDIFF).min(axis=1) - 1
-        for dtype, i in dt_idx.items():
-            label = f"{dtype}:{suffix}"
-            if lo[i] > hi[i]:
-                contradictions.append(f"{benchmark}|{label}[{int(lo[i])},{int(hi[i])}]")
-            elif lo[i] == hi[i]:
-                games.setdefault(benchmark, {})[label] = int(lo[i])
+    # Extend: ensure each suffix has ALL its dtypes in EVERY benchmark.
+    # Removes selection bias from partial dtype coverage across runs.
+    suffix_all_dtypes: dict[str, list[str]] = {}
+    for by_suffix in result.values():
+        for suffix, fm in by_suffix.items():
+            seen = suffix_all_dtypes.get(suffix)
+            if seen is None:
+                suffix_all_dtypes[suffix] = list(fm.dtypes)
             else:
-                unresolved[label] = unresolved.get(label, 0) + 1
+                for dt in fm.dtypes:
+                    if dt not in seen:
+                        seen.append(dt)
+    for suffix in suffix_all_dtypes:
+        suffix_all_dtypes[suffix] = sorted(suffix_all_dtypes[suffix], key=_dtype_key)
 
-    if contradictions:
-        sample = "; ".join(contradictions[:5])
-        raise ValueError(f"Inconsistent ranking constraints in {len(contradictions)} groups. Examples: {sample}")
+    for by_suffix in result.values():
+        for suffix in list(by_suffix):
+            fm = by_suffix[suffix]
+            all_dtypes = suffix_all_dtypes[suffix]
+            if fm.dtypes == all_dtypes:
+                continue
+            old_idx = {d: i for i, d in enumerate(fm.dtypes)}
+            new_cells = np.zeros((len(all_dtypes), _NDIFF), dtype=np.int8)
+            for i, dt in enumerate(all_dtypes):
+                if dt in old_idx:
+                    new_cells[i] = fm.cells[old_idx[dt]]
+            by_suffix[suffix] = FilledMatrix(
+                dtypes=all_dtypes,
+                cells=_fill_matrix(new_cells, _hierarchy_pairs(all_dtypes)),
+            )
 
-    resolved_cells = sum(len(v) for v in games.values())
-    unresolved_cells = sum(unresolved.values())
-    return FrontierBuild(games=games, labels=labels, unresolved_by_label=unresolved, resolved_cells=resolved_cells,
-                         unresolved_cells=unresolved_cells, implied_failures=implied_failures)
-
-
-def frontier_ranks(frontiers: dict[str, int]) -> tuple[list[str], list[int]]:
-    ordered = sorted(frontiers.items(), key=lambda kv: (-kv[1], kv[0]))
-    labels = [label for label, _ in ordered]
-    ranks, prev, rank = [], None, 0
-    for i, (_, frontier) in enumerate(ordered, 1):
-        if frontier != prev:
-            rank, prev = i, frontier
-        ranks.append(rank)
-    return labels, ranks
-
-
-def _resolved_frame(build: FrontierBuild) -> pd.DataFrame:
-    rows = [
-        (benchmark, label, frontier)
-        for benchmark, per_benchmark in build.games.items()
-        for label, frontier in per_benchmark.items()
-    ]
-    if not rows:
-        return pd.DataFrame(columns=["benchmark", "label", "frontier", "dtype", "suffix"])
-    resolved = pd.DataFrame(rows, columns=["benchmark", "label", "frontier"])
-    parts = resolved["label"].str.split(":", n=1, expand=True)
-    resolved["dtype"] = parts[0]
-    resolved["suffix"] = parts[1]
-    return resolved
+    return result
 
 
-def _suffix_penalties(suffix_df: pd.DataFrame, suffix: str) -> dict[str, float]:
-    per_dtype = {dtype: g.set_index("benchmark")["frontier"].astype(float) for dtype, g in suffix_df.groupby("dtype", sort=False)}
-    penalties = {dtype: 0.0 for dtype in per_dtype}
-    for child, parent in _DTYPE_EDGES:
-        if child not in per_dtype or parent not in per_dtype:
-            continue
-        joined = pd.DataFrame({"parent": per_dtype[parent], "child": per_dtype[child]}).dropna()
-        if joined.empty:
-            penalties[child] = penalties[parent]
-            continue
-        edge = float((joined["child"] - joined["parent"]).mean())
-        if edge > 1e-9:
-            raise ValueError(f"Constraint violation in {suffix}: {parent}->{child} edge={edge:.4f}")
-        penalties[child] = penalties[parent] + edge
-    return penalties
+def _build_games(matrices: dict[str, dict[str, FilledMatrix]]) -> tuple[
+    dict[tuple[str, int], dict[str, bool]],
+    dict[str, list[int]],
+]:
+    """From filled matrices, produce per-(benchmark, difficulty) game maps
+    and per-label frontier lists (for display stats)."""
+    cell_map: dict[tuple[str, int], dict[str, bool]] = {}
+    label_frontiers: dict[str, list[int]] = {}
+
+    for benchmark, by_suffix in matrices.items():
+        for suffix, fm in by_suffix.items():
+            for i, dt in enumerate(fm.dtypes):
+                label = f"{dt}:{suffix}"
+                row = fm.cells[i]
+                pass_idx = np.where(row == 1)[0]
+                frontier = int(pass_idx.max()) if len(pass_idx) > 0 else -1
+                label_frontiers.setdefault(label, []).append(frontier)
+                for di in range(_NDIFF):
+                    if row[di] == 0:
+                        continue
+                    cell_map.setdefault((benchmark, di), {})[label] = row[di] == 1
+
+    return cell_map, label_frontiers
 
 
-def rank_variants(build: FrontierBuild) -> tuple[pd.DataFrame, int, int]:
+def rank_variants(df: pd.DataFrame) -> tuple[pd.DataFrame, int, int, int, int]:
+    matrices = build_matrices(df)
+    if not matrices:
+        return pd.DataFrame(), 0, 0, 0, 0
+
+    cell_map, label_frontiers = _build_games(matrices)
+    all_labels = sorted({l for by_label in cell_map.values() for l in by_label},
+                        key=lambda l: (l.split(":", 1)[1], _dtype_key(l.split(":", 1)[0]), l))
+
     model = PlackettLuce()
-    suffixes = sorted({label.split(":", 1)[1] for label in build.labels})
-    suffix_ratings = {suffix: model.rating(name=suffix) for suffix in suffixes}
-    resolved = _resolved_frame(build)
-    by_label_bench = {
-        label: g.set_index("benchmark")["frontier"].to_dict()
-        for label, g in resolved.groupby("label", sort=False)
-    }
-    penalties_by_suffix = {
-        suffix: _suffix_penalties(g[["benchmark", "dtype", "frontier"]], suffix)
-        for suffix, g in resolved.groupby("suffix", sort=False)
-    }
+    ratings = {l: model.rating(name=l) for l in all_labels}
     played: dict[str, int] = {}
+    n_games = 0
     skipped_singletons = 0
     skipped_ties = 0
 
-    for benchmark in sorted(build.games):
-        suffix_game = {
-            suffix: frontier
-            for label, frontier in build.games[benchmark].items()
-            for dtype, suffix in [label.split(":", 1)]
-            if dtype == "fp32"
-        }
-        if len(suffix_game) < 2:
+    for (bench, di) in sorted(cell_map):
+        by_label = cell_map[(bench, di)]
+        if len(by_label) < 2:
             skipped_singletons += 1
             continue
-        game_labels, ranks = frontier_ranks(suffix_game)
+        game_labels = sorted(by_label)
+        ranks = [1 if by_label[l] else 2 for l in game_labels]
         if len(set(ranks)) < 2:
             skipped_ties += 1
             continue
-        for suffix, updated in zip(game_labels, model.rate([[suffix_ratings[suffix]] for suffix in game_labels], ranks=ranks)):
-            suffix_ratings[suffix] = updated[0]
-            played[suffix] = played.get(suffix, 0) + 1
+        teams = [[ratings[l]] for l in game_labels]
+        updated = model.rate(teams, ranks=ranks)
+        for i, l in enumerate(game_labels):
+            ratings[l] = updated[i][0]
+            played[l] = played.get(l, 0) + 1
+        n_games += 1
 
-    x, y = [], []
-    for suffix in suffixes:
-        values = list(by_label_bench.get(f"fp32:{suffix}", {}).values())
-        if values:
-            x.append(float(np.mean(values)))
-            y.append(float(suffix_ratings[suffix].ordinal()))
-    if len(x) >= 2 and np.var(x) > 1e-12:
-        slope = float(np.cov(x, y, bias=True)[0, 1] / np.var(x))
-    else:
-        slope = 0.0
-    if slope < -1e-12:
-        raise ValueError(f"Invalid frontier->rating slope ({slope:.6f}); suffix ranking is inconsistent")
-    slope = max(0.0, slope)
+    n_matrices = sum(len(by_suffix) for by_suffix in matrices.values())
 
     rows = []
-    for label in build.labels:
+    for label in all_labels:
+        r = ratings[label]
         dtype = label.split(":", 1)[0]
-        suffix = label.split(":", 1)[1]
-        fs_map = by_label_bench.get(label, {})
-        fs = list(fs_map.values())
-        suffix_rating = suffix_ratings[suffix]
-        penalty = penalties_by_suffix.get(suffix, {}).get(dtype, 0.0)
-        mu = suffix_rating.mu + slope * penalty
-        sigma = suffix_rating.sigma
+        frontiers = label_frontiers.get(label, [])
+        n_benchmarks = len(frontiers)
         rows.append({
             "Rank": 0,
             "Variant": label,
             "Dtype": dtype,
-            "Games": played.get(suffix, 0),
-            "Benchmarks": len(fs_map),
-            "Unresolved": build.unresolved_by_label.get(label, 0),
-            "Mean Frontier": float(np.mean(fs)) if fs else 0.0,
-            "Mu": mu,
-            "Sigma": sigma,
-            "Ordinal": mu - 3.0 * sigma,
+            "Games": played.get(label, 0),
+            "Benchmarks": n_benchmarks,
+            "Mean Frontier": float(np.mean(frontiers)) if frontiers else 0.0,
+            "Mu": r.mu,
+            "Sigma": r.sigma,
+            "Ordinal": r.ordinal(),
         })
-    rank_df = pd.DataFrame(rows).sort_values(["Ordinal", "Mu", "Sigma"], ascending=[False, False, True], kind="mergesort")
+
+    rank_df = pd.DataFrame(rows).sort_values(
+        ["Ordinal", "Mu", "Sigma"], ascending=[False, False, True], kind="mergesort"
+    )
     rank_df["Rank"] = np.arange(1, len(rank_df) + 1)
-
-    ord_by_suffix: dict[str, dict[str, float]] = {}
-    for row in rank_df.to_dict("records"):
-        dt, suffix = row["Variant"].split(":", 1)
-        ord_by_suffix.setdefault(suffix, {})[dt] = float(row["Ordinal"])
-    violations = []
-    for suffix, vals in ord_by_suffix.items():
-        for child, parent in _DTYPE_EDGES:
-            if child in vals and parent in vals and vals[parent] + 1e-12 < vals[child]:
-                violations.append((suffix, parent, child, vals[parent], vals[child]))
-    if violations:
-        s, p, c, pv, cv = violations[0]
-        raise ValueError(f"Post-rank dtype violation: {s} {p}<{c} ({pv:.4f}<{cv:.4f})")
-
-    return rank_df, skipped_singletons, skipped_ties
+    return rank_df, n_games, n_matrices, skipped_singletons, skipped_ties
 
 
 def _print_legend(console: Console) -> None:
@@ -298,7 +308,6 @@ def _print_ranking(console: Console, rank_df: pd.DataFrame) -> None:
     table.add_column("Dtype")
     table.add_column("Games", justify="right")
     table.add_column("Benchmarks", justify="right")
-    table.add_column("Unresolved", justify="right")
     table.add_column("Mean Frontier", justify="right")
     table.add_column("Mu", justify="right")
     table.add_column("Sigma", justify="right")
@@ -311,7 +320,6 @@ def _print_ranking(console: Console, rank_df: pd.DataFrame) -> None:
             str(row["Dtype"]),
             str(row["Games"]),
             str(row["Benchmarks"]),
-            str(row["Unresolved"]),
             f"{row['Mean Frontier']:.2f}",
             f"{row['Mu']:.4f}",
             f"{row['Sigma']:.4f}",
@@ -331,15 +339,14 @@ def main() -> None:
     df = load_results(args.file)
     if args.dtype:
         df = df[df["dtype"].isin(args.dtype)].reset_index(drop=True)
-    build = compute_frontiers(df)
-    rank_df, skipped_singletons, skipped_ties = rank_variants(build)
+
+    rank_df, n_games, n_matrices, skipped_singletons, skipped_ties = rank_variants(df)
 
     console.print(f"File: {args.file}")
-    console.print("Backend: OpenSkill Plackett-Luce (fail-closure frontier per benchmark)")
+    console.print("Backend: OpenSkill Plackett-Luce (per-difficulty binary games)")
     console.print(
-        f"Entries: {len(df)} | Variants: {len(build.labels)} | Games: {len(build.games)} | "
-        f"Resolved: {build.resolved_cells} | Unresolved: {build.unresolved_cells} | "
-        f"Implied fails: {build.implied_failures} | "
+        f"Entries: {len(df)} | Variants: {len(rank_df)} | "
+        f"Matrices: {n_matrices} | Games: {n_games} | "
         f"Skipped: {skipped_singletons} single-variant, {skipped_ties} all-tied"
     )
     console.print()

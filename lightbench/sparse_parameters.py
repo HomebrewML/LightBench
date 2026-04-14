@@ -17,6 +17,7 @@ class Model(nn.Module):
         super().__init__()
         self.param = nn.Parameter(torch.randn(size))
         self.sparsity = sparsity
+        self.noise_scale = 1.0 / (sparsity * size) ** 0.5
         mask = torch.zeros_like(self.param)
         while mask.sum().item() < 1:
             mask = torch.rand_like(self.param) < self.sparsity
@@ -25,7 +26,8 @@ class Model(nn.Module):
             print(f"enforcing sparsity = {1 / size}")
 
     def forward(self):
-        return self.param.square().mean()
+        noise = torch.randn_like(self.param) * self.noise_scale
+        return (self.param + noise).square().mean()
 
 
 @app.command()
@@ -47,13 +49,13 @@ def main(
         model,
         None,
         None,
-        loss_win_condition(win_condition_multiplier * 1e-4),
+        loss_win_condition(win_condition_multiplier * 1e-2),
         steps,
         opt,
         weight_decay,
         trials=trials,
         dtype=dtype,
-    )  # More failure attempts allowed
+    )
 
 
 if __name__ == "__main__":
