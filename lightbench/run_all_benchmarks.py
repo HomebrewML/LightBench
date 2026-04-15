@@ -401,11 +401,13 @@ def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
     }
 
 
-def _subprocess_loop(task_q, result_q, gpu):
+def _subprocess_loop(task_q, result_q, gpu, warmup_event):
     import torch
+    from lightbench import utils
 
     torch.cuda.set_device(gpu)
     sys.stdout = open(os.devnull, "w")
+    utils._warmup_event = warmup_event
 
     while True:
         try:
@@ -431,7 +433,8 @@ class _SubprocessRunner:
         ctx = multiprocessing.get_context("spawn")
         self._tq = ctx.Queue()
         self._rq = ctx.Queue()
-        self._proc = ctx.Process(target=_subprocess_loop, args=(self._tq, self._rq, self.gpu), daemon=False)
+        self._warmup_event = ctx.Event()
+        self._proc = ctx.Process(target=_subprocess_loop, args=(self._tq, self._rq, self.gpu, self._warmup_event), daemon=False)
         self._proc.start()
 
     def _kill(self):
@@ -444,24 +447,31 @@ class _SubprocessRunner:
     def run(self, watchdog_timeout, **kwargs):
         if self._proc is None or not self._proc.is_alive():
             self._start()
+        self._warmup_event.clear()
         self._tq.put(kwargs)
-        poll = min(5.0, float(watchdog_timeout + _WATCHDOG_SLACK)) if watchdog_timeout > 0 else 5.0
+        poll = 5.0
         elapsed = 0.0
         deadline = float(watchdog_timeout + _WATCHDOG_SLACK) if watchdog_timeout > 0 else float("inf")
-        while elapsed < deadline:
+        warmup_done = False
+        while True:
             try:
                 msg = self._rq.get(timeout=poll)
             except Empty:
-                elapsed += poll
                 if not self._proc.is_alive():
                     self._kill()
                     return "error", None, "Subprocess died"
+                if not warmup_done and self._warmup_event.is_set():
+                    warmup_done = True
+                    elapsed = 0.0
+                if warmup_done:
+                    elapsed += poll
+                    if elapsed >= deadline:
+                        self._kill()
+                        return "timeout", None, f"Hard timeout after {watchdog_timeout}s"
                 continue
             if msg[0] == "error":
                 self._kill()
             return msg
-        self._kill()
-        return "timeout", None, f"Hard timeout after {watchdog_timeout}s"
 
     def close(self):
         if self._proc is not None and self._proc.is_alive():

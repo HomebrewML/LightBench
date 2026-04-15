@@ -530,6 +530,7 @@ _HPARAM_DEFAULTS = {
     "1mshampoo_beta": 1e-3,
 }
 _BENCHMARK_TIMEOUT_SECONDS = 4 * 3600
+_warmup_event = None
 _VALIDATOR_FLUSH_STEPS = 32
 _MAX_EXCEPTION_STREAK = 8
 _MAX_TOTAL_EXCEPTIONS = 32
@@ -604,7 +605,7 @@ class Objective:
         self.avg = None
         self.did_win = False
         self.timed_out = False
-        self.deadline = time.perf_counter() + _BENCHMARK_TIMEOUT_SECONDS
+        self.deadline = float("inf")
         self.max_validation_batch = _VALIDATOR_FLUSH_STEPS
         self._last_loss = None
         self.disable_early_stopping = False
@@ -743,6 +744,8 @@ class Objective:
         target, _, loss = self._inner(params)
         if self.attempt == 1:
             self.deadline = time.perf_counter() + _BENCHMARK_TIMEOUT_SECONDS
+            if _warmup_event is not None:
+                _warmup_event.set()
         target = float(target)
         loss = float(loss)
         if not np.isfinite(target):
