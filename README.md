@@ -42,7 +42,7 @@ The editable install exposes the same console script while tracking the main bra
 Run the full benchmark harness after installation to reproduce the internal HeavyBall dashboards:
 
 ```bash
-lightbench --opt ForeachSOAP --opt AdamW --steps 100000 --difficulties trivial medium
+lightbench --opt SOAP --opt AdamW --steps 100000 --dtype fp32 bf16+ecc bf16
 ```
 
 Every CLI entry supports `--help`. For the global runner:
@@ -58,7 +58,7 @@ By default LightBench streams progress to stdout and stores results in `benchmar
 Each benchmark is a Python module under the `lightbench` namespace and can be executed directly:
 
 ```bash
-python -m lightbench.beale --opt ForeachSOAP
+python -m lightbench.beale --opt SOAP
 python -m lightbench.class_imbalance_rare --opt Adam
 python -m lightbench.xor_sequence --help
 ```

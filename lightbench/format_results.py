@@ -162,7 +162,7 @@ def bayes(
     np.savez_compressed(
         os.path.join(out_dir, "posterior.npz"),
         K=np.array(post.K), theta=post.theta, phi=post.phi,
-        gamma=post.gamma, b=post.b, c=post.c,
+        gamma=post.gamma, b=post.b, c=post.c, log_c=post.log_c,
         log_alpha=post.log_alpha if post.log_alpha is not None else np.zeros(0),
         opts=np.array([f"{o}\t{d}" for o, d in post.challenger_names]),
         benches=np.array(post.bench_names),

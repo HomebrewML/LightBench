@@ -48,10 +48,6 @@ class TransferLearningModel(nn.Module):
             nn.ReLU(),
         )
         self.classifier = nn.Linear(feature_dim // 8, n_classes)
-        for i, layer in enumerate(self.feature_extractor):
-            if isinstance(layer, nn.Linear) and i // 2 < freeze_layers:
-                for param in layer.parameters():
-                    param.requires_grad = False
         self.register_buffer("source_X", torch.randn(n_samples, feature_dim))
         self.register_buffer("source_y", torch.randint(0, n_classes, (n_samples,)))
         shift_matrix = torch.randn(feature_dim, feature_dim) * domain_shift_strength
@@ -62,12 +58,22 @@ class TransferLearningModel(nn.Module):
         self.register_buffer("target_X", target_X)
         self.register_buffer("target_y", target_y)
         self._initialize_pretrained_weights()
+        for i, layer in enumerate(self.feature_extractor):
+            if isinstance(layer, nn.Linear) and i // 2 < freeze_layers:
+                for param in layer.parameters():
+                    param.requires_grad = False
 
     def _initialize_pretrained_weights(self):
-        with torch.no_grad():
-            for _ in range(10):
-                features = self.feature_extractor(self.source_X)
-                features = F.normalize(features, dim=1)
+        was_training = self.training
+        self.train()
+        optimizer = torch.optim.AdamW(self.parameters(), lr=1e-3)
+        for _ in range(10):
+            optimizer.zero_grad(set_to_none=True)
+            features = F.normalize(self.feature_extractor(self.source_X), dim=1)
+            loss = F.cross_entropy(self.classifier(features), self.source_y)
+            loss.backward()
+            optimizer.step()
+        self.train(was_training)
 
     def forward(self, use_target_domain=True):
         if use_target_domain:

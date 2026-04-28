@@ -40,7 +40,7 @@ def main(
     size: int = 512,
     steps: int = 500,
     weight_decay: float = 0,
-    opt: str = typer.Option("adamw", help="Optimizers to use"),
+    opt: str = typer.Option("AdamW", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,
     trials: int = 3,
     config: Optional[float] = None,

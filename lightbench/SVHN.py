@@ -58,7 +58,7 @@ def main(
     channels: int = 32,
     depth: int = 12,
     batch: int = 128,
-    steps: int = 0,
+    steps: int = 100,
     weight_decay: float = 0,
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,

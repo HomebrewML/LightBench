@@ -13,7 +13,14 @@ from queue import Empty
 import numpy as np
 import typer
 
-from lightbench.utils import SkipConfig, parse_opt_name, _HPARAM_NAMES, _DTYPE_PREREQ, opt_label
+from lightbench.utils import (
+    _DTYPE_PREREQ,
+    _HPARAM_NAMES,
+    SkipConfig,
+    _resolve_optim_callable,
+    opt_label,
+    parse_opt_name,
+)
 
 app = typer.Typer()
 
@@ -41,6 +48,16 @@ def _validate_dtype_deps(dtypes):
     missing = [(c, p) for c, p in _DTYPE_PREREQ.items() if c in selected and p not in selected]
     if missing:
         raise ValueError(f"Missing dtype dependencies: {', '.join(f'{c} requires {p}' for c, p in missing)}")
+
+
+def _is_dtype_gated(dtype, gated_by_dtype):
+    while True:
+        if gated_by_dtype.get(dtype):
+            return True
+        parent = _DTYPE_PREREQ.get(dtype)
+        if parent is None:
+            return False
+        dtype = parent
 
 
 def _task_key(name, difficulty, opt, dtype):
@@ -311,7 +328,7 @@ def _payload_priority(
     score = 0.0
     active = 0
     for dt in dtypes:
-        if gated_by_dtype.get(dt):
+        if _is_dtype_gated(dt, gated_by_dtype):
             continue
         state = _SearchState.from_results(
             precision=precision,
@@ -353,8 +370,9 @@ def _get_prior(irt_model, opt, bench, dtype, precision):
 
 
 def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
-    import lightbench
     import torch
+
+    import lightbench
     from lightbench import utils
 
     diff = float(diff)
@@ -363,10 +381,11 @@ def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
     utils._trial_hint = hint
 
     mod = lightbench.load(name)
+    opt_name = f"{_DTYPE_PREFIX[dtype]}{opt}"
     arguments = {
         "steps": steps,
         "weight_decay": 0,
-        "opt": f"{_DTYPE_PREFIX[dtype]}{opt}",
+        "opt": opt_name,
         "trials": trials,
         "win_condition_multiplier": 1.0,
         "config": diff,
@@ -393,7 +412,7 @@ def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
         "loss": float(loss) if loss is not None and math.isfinite(loss) else None,
         "attempts": int(r["attempts"]),
         "timed_out": bool(r["timed_out"]),
-        "error": "",
+        "error": str(r.get("error") or ""),
         "steps": int(steps),
         "trials": int(trials),
         "timeout": int(timeout),
@@ -403,6 +422,7 @@ def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
 
 def _subprocess_loop(task_q, result_q, gpu, warmup_event):
     import torch
+
     from lightbench import utils
 
     torch.cuda.set_device(gpu)
@@ -574,6 +594,24 @@ def worker(task_queue, result_queue, worker_index, timeout, min_evals, max_evals
                     continue
                 parent = _DTYPE_PREREQ.get(dt)
                 prior = accumulated.get(dt, [])
+                if parent and _is_dtype_gated(parent, gated_by_dtype):
+                    gated_by_dtype[dt] = True
+                    result_queue.put(
+                        _fail(
+                            name,
+                            0.0,
+                            opt,
+                            dt,
+                            steps,
+                            trials,
+                            timeout,
+                            f"Gated: {parent} failed",
+                            search_step=0,
+                            search_lo=0.0,
+                            search_hi=1.0,
+                        )
+                    )
+                    continue
                 if parent and parent in accumulated:
                     parent_state = _SearchState.from_results(
                         precision=precision,
@@ -584,6 +622,7 @@ def worker(task_queue, result_queue, worker_index, timeout, min_evals, max_evals
                     )
                     if parent_state.evals_done >= min_evals:
                         if parent_state.mass_above(_GATE_MIN_PASS) < _GATE_MASS:
+                            gated_by_dtype[dt] = True
                             result_queue.put(
                                 _fail(
                                     name,
@@ -700,12 +739,18 @@ def main(
     progress_log: str = "benchmark_results.jsonl",
     resume: bool = False,
 ):
-    import heavyball
     import torch
+
     from lightbench import available
 
     if parallelism < 1:
         raise ValueError("--parallelism must be >= 1")
+    if steps < 1:
+        raise ValueError("--steps must be >= 1")
+    if trials < 1:
+        raise ValueError("--trials must be >= 1")
+    if timeout < 1:
+        raise ValueError("--timeout must be >= 1")
     if min_evals < 1:
         raise ValueError("--min-evals must be >= 1")
     if max_evals < min_evals:
@@ -746,7 +791,9 @@ def main(
 
     for o in opt:
         name, _ = parse_opt_name(o)
-        if not callable(getattr(heavyball, name, None)):
+        try:
+            _resolve_optim_callable(name)
+        except (AttributeError, TypeError):
             raise ValueError(f"Unknown optimizer '{o}' (resolved: '{name}')")
 
     log_dir = os.path.dirname(progress_log)
@@ -804,7 +851,7 @@ def main(
 
         needs_run = False
         for dt in ordered_dtypes:
-            if gated_by_dtype.get(dt):
+            if _is_dtype_gated(dt, gated_by_dtype):
                 continue
             state = _SearchState.from_results(
                 precision=precision,
@@ -851,12 +898,10 @@ def main(
     if max_payloads is not None:
         payloads = payloads[:max_payloads]
 
-    total = len(payloads) * max_evals * len(ordered_dtypes)
-    if not total:
-        raise ValueError("No tasks to run")
     if not payloads:
         print("No pending tasks.")
         return
+    total = len(payloads) * max_evals * len(ordered_dtypes)
 
     cuda_count = torch.cuda.device_count()
     if cuda_count < 1:
@@ -887,7 +932,6 @@ def main(
 
     completed = len(results_by_key)
     done_workers = 0
-    interrupted = False
     log_f = open(progress_log, "a", buffering=1)
 
     try:
@@ -920,7 +964,6 @@ def main(
             diff_label = f"{difficulty:.4f}" if isinstance(difficulty, (float, int)) else str(difficulty)
             print(f"[{completed}/{total}] {result['benchmark']}-{diff_label} - {result['opt']}: {tag}")
     except KeyboardInterrupt:
-        interrupted = True
         print("\nInterrupted. Saving progress...")
     finally:
         log_f.close()

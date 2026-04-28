@@ -30,6 +30,39 @@ for _dt in ("fp32", "bf16+ecc", "bf16", "fp16+ecc", "fp16"):
 class FilledMatrix:
     dtypes: list[str]
     cells: np.ndarray  # (len(dtypes), _NDIFF), values in {-1, 0, 1}
+    difficulties: tuple = _DIFFICULTIES
+
+
+def _indexed_difficulties(df: pd.DataFrame) -> tuple[pd.DataFrame, tuple]:
+    if df.empty:
+        return df.copy(), ()
+    difficulty = df["difficulty"]
+    cat = difficulty.isin(_DIFF_IDX)
+    numeric = pd.to_numeric(difficulty, errors="coerce")
+    num = np.isfinite(numeric.to_numpy())
+
+    if cat.any() and not num.any():
+        work = df.loc[cat].copy()
+        work["diff_idx"] = work["difficulty"].map(_DIFF_IDX).astype(int)
+        return work, _DIFFICULTIES
+
+    if num.any() and not cat.any():
+        work = df.loc[num].copy()
+        values = tuple(float(x) for x in np.sort(numeric.loc[work.index].unique()))
+        diff_idx = {d: i for i, d in enumerate(values)}
+        work["diff_idx"] = numeric.loc[work.index].map(diff_idx).astype(int)
+        return work, values
+
+    values = np.full(len(df), np.nan, dtype=float)
+    for label, idx in _DIFF_IDX.items():
+        values[difficulty.eq(label).to_numpy()] = idx / max(_NDIFF - 1, 1)
+    values[num] = numeric.to_numpy()[num]
+    keep = np.isfinite(values)
+    work = df.loc[keep].copy()
+    levels = tuple(float(x) for x in np.unique(values[keep]))
+    diff_idx = {d: i for i, d in enumerate(levels)}
+    work["diff_idx"] = [diff_idx[float(v)] for v in values[keep]]
+    return work, levels
 
 
 def load_results(path: str) -> pd.DataFrame:
@@ -97,7 +130,7 @@ def _fill_matrix(states: np.ndarray, pairs: list[tuple[int, int]]) -> np.ndarray
       Difficulty mono:   pass at j  ->  pass at 0 .. j-1
     """
     m = states.copy()
-    n_dt, n_diff = m.shape
+    n_dt, _ = m.shape
 
     # Phase 1: close failures, overriding contradictory passes
     while True:
@@ -154,23 +187,23 @@ def build_matrices(df: pd.DataFrame) -> dict[str, dict[str, FilledMatrix]]:
     is present in ALL benchmarks for that suffix.  The fill then propagates
     implied results (failures down, passes up) into the new rows.
     """
-    work = df[df["difficulty"].isin(_DIFF_IDX)].copy()
+    work, levels = _indexed_difficulties(df)
     if work.empty:
         return {}
-    work["diff_idx"] = work["difficulty"].map(_DIFF_IDX).astype(int)
+    n_diff = len(levels)
 
     result: dict[str, dict[str, FilledMatrix]] = {}
     for (benchmark, suffix), group in work.groupby(["benchmark", "suffix"], sort=True):
         dtypes = sorted(group["dtype"].unique().tolist(), key=_dtype_key)
         states = (
             group.pivot(index="dtype", columns="diff_idx", values="state")
-            .reindex(index=dtypes, columns=range(_NDIFF), fill_value=0)
+            .reindex(index=dtypes, columns=range(n_diff), fill_value=0)
             .fillna(0)
             .astype(np.int8)
             .to_numpy()
         )
         result.setdefault(benchmark, {})[suffix] = FilledMatrix(
-            dtypes=dtypes, cells=_fill_matrix(states, _hierarchy_pairs(dtypes)),
+            dtypes=dtypes, cells=_fill_matrix(states, _hierarchy_pairs(dtypes)), difficulties=levels,
         )
 
     # Extend: ensure each suffix has ALL its dtypes in EVERY benchmark.
@@ -185,8 +218,8 @@ def build_matrices(df: pd.DataFrame) -> dict[str, dict[str, FilledMatrix]]:
                 for dt in fm.dtypes:
                     if dt not in seen:
                         seen.append(dt)
-    for suffix in suffix_all_dtypes:
-        suffix_all_dtypes[suffix] = sorted(suffix_all_dtypes[suffix], key=_dtype_key)
+    for suffix, dtypes in suffix_all_dtypes.items():
+        suffix_all_dtypes[suffix] = sorted(dtypes, key=_dtype_key)
 
     for by_suffix in result.values():
         for suffix in list(by_suffix):
@@ -195,13 +228,14 @@ def build_matrices(df: pd.DataFrame) -> dict[str, dict[str, FilledMatrix]]:
             if fm.dtypes == all_dtypes:
                 continue
             old_idx = {d: i for i, d in enumerate(fm.dtypes)}
-            new_cells = np.zeros((len(all_dtypes), _NDIFF), dtype=np.int8)
+            new_cells = np.zeros((len(all_dtypes), n_diff), dtype=np.int8)
             for i, dt in enumerate(all_dtypes):
                 if dt in old_idx:
                     new_cells[i] = fm.cells[old_idx[dt]]
             by_suffix[suffix] = FilledMatrix(
                 dtypes=all_dtypes,
                 cells=_fill_matrix(new_cells, _hierarchy_pairs(all_dtypes)),
+                difficulties=levels,
             )
 
     return result
@@ -224,7 +258,7 @@ def _build_games(matrices: dict[str, dict[str, FilledMatrix]]) -> tuple[
                 pass_idx = np.where(row == 1)[0]
                 frontier = int(pass_idx.max()) if len(pass_idx) > 0 else -1
                 label_frontiers.setdefault(label, []).append(frontier)
-                for di in range(_NDIFF):
+                for di in range(fm.cells.shape[1]):
                     if row[di] == 0:
                         continue
                     cell_map.setdefault((benchmark, di), {})[label] = row[di] == 1

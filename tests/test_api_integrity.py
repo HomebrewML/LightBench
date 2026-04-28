@@ -1,12 +1,17 @@
+import json
 import re
 from pathlib import Path
 
 import pytest
 import torch
+from torch import nn
+from typer.testing import CliRunner
 
 import lightbench
-from lightbench import _EXCLUDED
-from lightbench.utils import difficulty_to_kwargs
+from lightbench import _EXCLUDED, utils
+from lightbench.run_all_benchmarks import _is_dtype_gated
+from lightbench.run_all_benchmarks import app as runner_app
+from lightbench.utils import _resolve_optim_callable, difficulty_to_kwargs
 
 _pkg = Path(lightbench.__file__).resolve().parent
 _utils = (_pkg / "utils.py").read_text()
@@ -178,8 +183,9 @@ def test_runner_passes_scalars():
 
 def test_success_metric():
     assert "Successfully found the minimum" not in _runner
-    assert "Win: Yes" in _runner
-    assert "Win: Yes" in _utils
+    assert '"success": bool(r["did_win"])' in _runner
+    assert "Win:" in _utils
+    assert "'Yes' if obj.did_win else 'No'" in _utils
 
 
 def test_failure_threshold_removed():
@@ -189,24 +195,92 @@ def test_failure_threshold_removed():
     assert obj_init and "failure_threshold" not in obj_init.group(0)
 
 
-def test_prev_best_tracked():
-    assert "nonlocal prev_best" in _utils
-    assert "prev_best = out" in _utils
+def test_objective_exceptions_reported_as_errors():
+    class Bad(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.param = nn.Parameter(torch.ones(()))
+
+        def forward(self):
+            raise RuntimeError("boom")
+
+    utils.trial(
+        Bad(),
+        None,
+        None,
+        utils.disabled_win_condition,
+        steps=1,
+        opt=torch.optim.SGD,
+        weight_decay=0,
+        trials=1,
+        device="cpu",
+    )
+    assert "objective exception" in utils._trial_result["error"]
+    assert "RuntimeError:boom" in utils._trial_result["error"]
 
 
 def test_callback_results_attribute():
     assert 'hasattr(self, "test_accuracies")' not in _utils
-    assert 'hasattr(self, "callback_results")' in _utils
+    assert "self.callback_results = []" in _utils
 
 
 def test_device_parameterized():
-    for cls in ("FailureCounter", "Validator"):
+    for cls in ("Validator",):
         m = re.search(rf"class {cls}:.*?(?=\nclass |\Z)", _utils, re.DOTALL)
         assert m
         for line in m.group(0).split("\n"):
             if line.lstrip().startswith("def "):
                 continue
             assert 'device="cuda"' not in line, f"{cls} hardcodes cuda: {line.strip()}"
+
+
+def test_optimizer_aliases_resolve():
+    assert _resolve_optim_callable("ForeachSOAP").__name__ == "SOAP"
+    assert _resolve_optim_callable("adamw").__name__ == "AdamW"
+
+
+def test_resume_all_complete_returns_before_cuda(tmp_path):
+    row = {
+        "benchmark": "absolute_varying_scale",
+        "difficulty": 0.5,
+        "opt": "AdamW",
+        "dtype": "fp32",
+        "success": False,
+        "runtime": 0.0,
+        "attempts": 1,
+        "timed_out": False,
+        "loss": 1.0,
+        "error": "",
+        "steps": 1,
+        "trials": 1,
+        "timeout": 1,
+        "winning": None,
+    }
+    log = tmp_path / "done.jsonl"
+    log.write_text(json.dumps(row) + "\n")
+    result = CliRunner().invoke(
+        runner_app,
+        [
+            "--opt", "AdamW",
+            "--steps", "1",
+            "--trials", "1",
+            "--timeout", "1",
+            "--min-evals", "1",
+            "--max-evals", "1",
+            "--include-benchmark", "absolute_varying_scale",
+            "--progress-log", str(log),
+            "--resume",
+            "--no-irt",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "No pending tasks." in result.output
+
+
+def test_dtype_gating_checks_ancestors():
+    assert _is_dtype_gated("bf16", {"bf16+ecc": True})
+    assert _is_dtype_gated("fp16", {"fp16+ecc": True})
+    assert not _is_dtype_gated("bf16+ecc", {"bf16": True})
 
 
 # --- Packaging ---------------------------------------------------------------

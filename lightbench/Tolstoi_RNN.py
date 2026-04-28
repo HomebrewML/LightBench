@@ -132,7 +132,7 @@ def main(
     dtype: str = typer.Option("float32", help="Data type to use"),
     hidden_size: int = 128,
     batch: int = 50,
-    steps: int = 0,
+    steps: int = 100,
     weight_decay: float = 0,
     opt: str = typer.Option("SOAP", help="Optimizers to use"),
     win_condition_multiplier: float = 1.0,

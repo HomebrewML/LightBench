@@ -2,7 +2,6 @@ import importlib
 import math
 import pathlib
 from copy import deepcopy
-from typing import List
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,7 +17,7 @@ app = typer.Typer(pretty_exceptions_enable=False)
 @app.command()
 def main(
     benchmark_name: str = typer.Option(..., help="Name of the benchmark to run (e.g., 'saddle_point')."),
-    optimizer_names: List[str] = typer.Option(
+    optimizer_names: list[str] = typer.Option(
         ..., "--optimizer-name", help="Name of an optimizer to include in the comparison."
     ),
     output_file: str = typer.Option(..., help="Path to save the generated GIF."),
@@ -28,7 +27,7 @@ def main(
     Generates an animated GIF of optimizer paths on a given benchmark.
     """
     try:
-        benchmark_module = importlib.import_module(f"benchmark.{benchmark_name}")
+        benchmark_module = importlib.import_module(f"lightbench.{benchmark_name}")
     except ImportError:
         print(f"Error: Benchmark '{benchmark_name}' not found.")
         raise typer.Exit(1)
@@ -67,9 +66,10 @@ def main(
             temp_model = deepcopy(model)
             temp_optimizer = get_optimizer(optimizer_name, temp_model.parameters(), lr=test_lr)
 
-            def _closure():
-                loss = temp_model()
+            def _closure(model=temp_model):
+                loss = model()
                 loss.backward()
+                return loss
 
             for _ in range(tuning_steps):
                 temp_optimizer.zero_grad()
@@ -88,9 +88,10 @@ def main(
 
         trajectory = [m.param.detach().clone()]
 
-        def _closure():
-            loss = m()
+        def _closure(model=m):
+            loss = model()
             loss.backward()
+            return loss
 
         for _ in range(steps):
             optimizer.zero_grad()

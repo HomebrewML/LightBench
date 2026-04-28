@@ -50,8 +50,11 @@ def main(
         inp = torch.randn((batch, length, 1), device="cuda", dtype=dtype)
         inp = inp > 0
         zeros = torch.zeros_like(inp)
-        zeros[:, torch.randint(0, length, (batch,), device="cuda")] = 1
-        zeros[:, torch.randint(0, length, (batch,), device="cuda")] = 1
+        rows = torch.arange(batch, device=zeros.device)
+        first = torch.randint(0, length, (batch,), device=zeros.device)
+        second = (first + torch.randint(1, length, (batch,), device=zeros.device)) % length
+        zeros[rows, first, 0] = 1
+        zeros[rows, second, 0] = 1
         target = (inp * zeros).sum(1) % 2
         return torch.stack((inp, zeros + 2), 0).to(dtype), target.to(dtype)
 

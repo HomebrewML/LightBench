@@ -70,14 +70,27 @@ _OPT_PREFIXES = [
 ]
 
 
+def _resolve_optim_name(optim: str) -> str:
+    candidates = [optim]
+    if optim.startswith("Foreach") and optim != "Foreach":
+        candidates.append(optim[len("Foreach") :])
+    heavyball_names = {name.lower(): name for name in dir(heavyball)}
+    for name in candidates:
+        if hasattr(heavyball, name):
+            return name
+        resolved = heavyball_names.get(name.lower())
+        if resolved is not None:
+            return resolved
+    raise AttributeError(f"Unknown optimizer '{optim}'")
+
+
 def _resolve_optim_callable(optim: str | C.BaseOpt) -> C.BaseOpt:
     if not isinstance(optim, str):
         return optim
-    if not hasattr(heavyball, optim):
-        raise AttributeError(f"Unknown optimizer '{optim}'")
-    obj = getattr(heavyball, optim)
+    name = _resolve_optim_name(optim)
+    obj = getattr(heavyball, name)
     if not callable(obj):
-        raise TypeError(f"Optimizer '{optim}' is not callable")
+        raise TypeError(f"Optimizer '{name}' is not callable")
     return obj
 
 
@@ -605,6 +618,8 @@ class Objective:
         self.avg = None
         self.did_win = False
         self.timed_out = False
+        self.total_exceptions = 0
+        self.last_exception = ""
         self.deadline = float("inf")
         self.max_validation_batch = _VALIDATOR_FLUSH_STEPS
         self._last_loss = None
@@ -800,8 +815,11 @@ class Objective:
                 study.stop()
                 return best_value
             except Exception as exc:
-                signature = f"{type(exc).__name__}:{str(exc).splitlines()[0]}"
+                lines = str(exc).splitlines()
+                signature = f"{type(exc).__name__}:{lines[0] if lines else ''}"
+                self.last_exception = signature
                 total_exceptions += 1
+                self.total_exceptions = total_exceptions
                 if signature == last_exception_signature:
                     exception_streak += 1
                 else:
@@ -1103,6 +1121,8 @@ def trial(
     device: torch.device | str = "cuda",
     dtype: torch.dtype | str | None = None,
 ):
+    if steps < 1:
+        raise ValueError("steps must be >= 1.")
     if data is None:
         data = _none_data
     group = min(group, steps)
@@ -1209,6 +1229,11 @@ def trial(
             "elapsed": elapsed,
             "winning": dict(winning),
             "callback_results": obj.callback_results or None,
+            "error": (
+                f"{obj.total_exceptions} objective exception(s); last={obj.last_exception}"
+                if obj.total_exceptions and obj.best_loss is None and not obj.timed_out
+                else ""
+            ),
         }
 
         if return_best:
