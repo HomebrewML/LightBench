@@ -52,7 +52,7 @@ def main(
         model,
         None,
         None,
-        param_norm_win_condition(1e-3 * win_condition_multiplier, model.target),
+        param_norm_win_condition(1e-3 * win_condition_multiplier, -model.target),
         steps,
         opt,
         weight_decay=weight_decay,

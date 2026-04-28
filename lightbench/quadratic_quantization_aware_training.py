@@ -5,7 +5,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -22,7 +22,8 @@ class Model(nn.Module):
     def forward(self):
         absmax = self.param.abs().max().detach()
         param = self.param / absmax * self.bins
-        param = param.round() / self.bins * absmax
+        param = param + (param.round() - param).detach()
+        param = param / self.bins * absmax
         return param.square().mean()
 
 
@@ -45,7 +46,7 @@ def main(
         model,
         None,
         None,
-        param_norm_win_condition(win_condition_multiplier * 1e-7, 0),
+        loss_win_condition(win_condition_multiplier * 1e-6),
         steps,
         opt,
         weight_decay=weight_decay,

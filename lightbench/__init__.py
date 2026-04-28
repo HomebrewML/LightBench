@@ -39,6 +39,13 @@ _EXCLUDED = {
     "CIFAR100",
     "SVHN",
     "Tolstoi_RNN",
+    "bayes_cv",
+    "bayes_mirt",
+    "bayes_rating",
+    "bayes_sim",
+    "bayes_viz",
+    "ranking_summary",
+    "minimax",
 }
 
 

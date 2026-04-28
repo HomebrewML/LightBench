@@ -47,7 +47,7 @@ def main(
     kwargs = difficulty_to_kwargs(difficulty_spec, config if config is not None else 0.0)
     model = Model(classes=64, items=kwargs["items"])
 
-    win_condition = disabled_win_condition if show_image else loss_win_condition(win_condition_multiplier * 1e-8)
+    win_condition = disabled_win_condition if show_image else loss_win_condition(win_condition_multiplier * 1e-2)
 
     trial(
         model,

@@ -51,7 +51,7 @@ def main(
     """Run exploding gradient benchmark with specified parameters."""
     dtype = resolve_dtype(dtype)
 
-    model = ExplodingGradient(dim, scale)
+    model = ExplodingGradient(scale, dim)
 
     trial(
         model,

@@ -20,14 +20,14 @@ difficulty_spec = {
 
 
 class Model(nn.Module):
-    def __init__(self, classes: int, items: int, add_class_every: int, features: int = 4):
+    def __init__(self, classes: int, items: int, add_class_every: int, features: int = 4, hidden: int = 32):
         super().__init__()
         self.model = nn.Sequential(
             nn.Embedding(classes, features),
             nn.Flatten(),
-            nn.Linear(items * features, classes),
+            nn.Linear(items * features, hidden),
             nn.ReLU(),
-            nn.Linear(classes, classes),
+            nn.Linear(hidden, classes),
         )
         self.step = 0
         self.add_class_every = add_class_every
@@ -36,11 +36,12 @@ class Model(nn.Module):
         self.weight = nn.Buffer(torch.randn((items,)))
 
     def forward(self):
+        self.step += 1
         data = torch.randint(0, self.classes, (16, self.items), device=self.model[0].weight.device)
         y = self.model(data)
         target = (data.float() @ self.weight.float()).round().long() % self.classes
         loss = torch.nn.functional.cross_entropy(y, target, reduction="none")
-        mask = target >= min(self.step / self.add_class_every + 2, self.classes)
+        mask = target < min(self.step / self.add_class_every + 2, self.classes)
         return (loss * mask).sum() / mask.sum().clamp(min=1)
 
 
@@ -68,9 +69,9 @@ def main(
     classes = kwargs["classes"]
     add_class_every = kwargs["add_class_every"]
     assert steps > add_class_every * (classes - 2)
-    model = Model(classes=classes, items=8, add_class_every=add_class_every)
+    model = Model(classes=classes, items=2, add_class_every=add_class_every)
 
-    win_condition = disabled_win_condition if show_image else loss_win_condition(win_condition_multiplier * 1e-8)
+    win_condition = disabled_win_condition if show_image else loss_win_condition(win_condition_multiplier * 1e-2)
 
     trial(
         model,

@@ -346,7 +346,7 @@ def _build_irt_prior(path, *, max_iter, min_rows, steps=None, trials=None, timeo
 def _get_prior(irt_model, opt, bench, dtype, precision):
     if irt_model is None:
         return None
-    return irt_model.prior_for(opt_label(opt), bench, dtype, precision)
+    return irt_model.prior_for((opt_label(opt), dtype), bench, precision)
 
 
 # --- Subprocess ---

@@ -15,7 +15,7 @@ import typer
 from heavyball.utils import set_torch
 from torch import nn
 
-from lightbench.utils import difficulty_to_kwargs, param_norm_win_condition, trial
+from lightbench.utils import difficulty_to_kwargs, loss_win_condition, trial
 
 app = typer.Typer(pretty_exceptions_enable=False)
 set_torch()
@@ -53,7 +53,7 @@ def main(
         model,
         None,
         None,
-        param_norm_win_condition(0.01 * win_condition_multiplier, 0),
+        loss_win_condition(0.01 * win_condition_multiplier),
         steps,
         opt,
         weight_decay,
