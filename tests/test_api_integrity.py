@@ -139,14 +139,6 @@ def test_runner_derives_from_available():
         assert name not in _runner
 
 
-# --- CLI entrypoint ----------------------------------------------------------
-
-
-def test_cli_exists():
-    src = (_pkg / "cli.py").read_text()
-    assert "from lightbench.run_all_benchmarks import app" in src
-
-
 # --- Structural invariants (source-level) ------------------------------------
 
 

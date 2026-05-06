@@ -25,6 +25,7 @@ from lightbench.utils import (
 app = typer.Typer()
 
 _DTYPE_PREFIX = {"fp32": "fp32-", "bf16+ecc": "bf16+ecc-", "bf16": "bf16-", "fp16+ecc": "fp16+ecc-", "fp16": "fp16-"}
+_DTYPE_TORCH = {"fp32": "float32", "bf16+ecc": "bfloat16", "bf16": "bfloat16", "fp16+ecc": "float16", "fp16": "float16"}
 _WATCHDOG_SLACK = 30
 _GATE_MIN_PASS = 0.01
 _GATE_MASS = 0.05
@@ -382,6 +383,7 @@ def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
 
     mod = lightbench.load(name)
     opt_name = f"{_DTYPE_PREFIX[dtype]}{opt}"
+    torch_dtype = _DTYPE_TORCH[dtype]
     arguments = {
         "steps": steps,
         "weight_decay": 0,
@@ -389,7 +391,7 @@ def _run_one(gpu, name, opt, dtype, diff, steps, trials, timeout, hint):
         "trials": trials,
         "win_condition_multiplier": 1.0,
         "config": diff,
-        "dtype": "float32",
+        "dtype": torch_dtype,
     }
     sig = inspect.signature(mod.main)
     if not any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):

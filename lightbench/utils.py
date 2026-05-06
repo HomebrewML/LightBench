@@ -235,9 +235,6 @@ def _validator_step(
     return (result, new_step, new_seen_until, new_ema, new_gm_cf, new_ga_cf, new_ema_cf, new_gml, new_gal, new_gas)
 
 
-_compiled_validator_step = _validator_step
-
-
 class Validator:
     ema_index: int = 4
     warmup: int = 256
@@ -329,7 +326,7 @@ class Validator:
 
     def __call__(self, loss):
         (result, self.step, seen_until, self.ema_states, self.gm_cf, self.ga_cf, self.ema_cf, gml, gal, gas) = (
-            _compiled_validator_step(
+            _validator_step(
                 *self._step_args(
                     loss,
                     self.step,
@@ -354,7 +351,7 @@ class Validator:
 
         triggered = torch.tensor(False, device=self.device)
         for k in range(n):
-            (result, step, seen_until, ema_states, gm_cf, ga_cf, ema_cf, gml, gal, gas) = _compiled_validator_step(
+            (result, step, seen_until, ema_states, gm_cf, ga_cf, ema_cf, gml, gal, gas) = _validator_step(
                 *self._step_args(
                     losses[k],
                     step,
@@ -767,12 +764,13 @@ class Objective:
             target = float("inf")
         if not np.isfinite(loss):
             loss = float("inf")
-        self.hyperparam_log_history.append(np.log10(np.array(params, dtype=np.float64)))
-        if np.isfinite(target) and (self.best_target is None or target < self.best_target):
-            self.best_target = target
-            self.best_loss = loss
-            self.best_at = self.attempt
-            self.avg = np.log(np.array(params))
+        if np.isfinite(target):
+            self.hyperparam_log_history.append(np.log10(np.array(params, dtype=np.float64)))
+            if self.best_target is None or target < self.best_target:
+                self.best_target = target
+                self.best_loss = loss
+                self.best_at = self.attempt
+                self.avg = np.log(np.array(params))
         if not self.disable_early_stopping:
             if (
                 self.best_at > 0
@@ -1193,24 +1191,24 @@ def trial(
             torch.cuda.synchronize()
 
         t0 = time.time()
-        hint_won = False
-        if hint is not None:
-            set_seed(0x12312)
-            try:
-                obj.objective(hint)
-                if obj.did_win:
-                    winning = dict(zip(_HPARAM_NAMES, hint))
-                    hint_won = True
-            except Exception:
-                pass
+        try:
+            hint_won = False
+            if hint is not None:
+                set_seed(0x12312)
+                try:
+                    obj.objective(hint)
+                    if obj.did_win:
+                        winning = dict(zip(_HPARAM_NAMES, hint))
+                        hint_won = True
+                except Exception:
+                    pass
 
-        if not hint_won:
-            set_seed()
-            try:
+            if not hint_won:
+                set_seed()
                 winning = obj.run_study(trials - (hint is not None))
-            finally:
-                if unscale and baseline_cautioning is not None:
-                    heavyball.utils._compilable_cautioning = baseline_cautioning
+        finally:
+            if unscale and baseline_cautioning is not None:
+                heavyball.utils._compilable_cautioning = baseline_cautioning
 
         if target_device.type == "cuda":
             torch.cuda.synchronize()
